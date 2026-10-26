@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VALKYRIE PROTOCOL — Isometric Co-op Extraction</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <!-- LOBBY SCREEN -->
+  <div id="lobby-screen" class="lobby-container">
+    <header class="lobby-header">
+      <div>
+        <h1>VALKYRIE PROTOCOL</h1>
+        <p class="subtitle">Tactical Isometric Co-op PvE Extraction</p>
+      </div>
+      <div class="callsign-box">
+        <label for="callsign-input">Operative Callsign:</label>
+        <input id="callsign-input" type="text" maxlength="20" placeholder="Enter Callsign..." />
+        <button id="save-name-btn" class="btn-secondary">Update</button>
+      </div>
+    </header>
+
+    <div id="leader-status-banner" class="leader-banner">
+      Connecting to tactical command server...
+    </div>
+
+    <div class="lobby-columns">
+      <!-- Left: Squad Roster -->
+      <section class="panel squad-panel">
+        <h2>Squad Roster</h2>
+        <div id="player-list" class="player-list"></div>
+        <div class="controls-guide">
+          <h3>Tactical Controls</h3>
+          <ul>
+            <li><b>WASD / Arrows</b>: Continuous Movement</li>
+            <li><b>Mouse Cursor</b>: Look &amp; Aim Weapon</li>
+            <li><b>Left Click</b>: Fire Weapon</li>
+            <li><b>R</b>: Reload Magazine</li>
+            <li><b>Space / Q</b>: Activate Class Skill</li>
+            <li><b>E</b>: Hack Terminal / Revive Teammate</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Middle: Character Class Selector -->
+      <section class="panel class-panel">
+        <h2>Select Operative Class</h2>
+        <div id="class-grid" class="card-grid"></div>
+      </section>
+
+      <!-- Right: Leader Mission Selector -->
+      <section class="panel mission-panel">
+        <h2>Select Mission (Leader)</h2>
+        <div id="mission-grid" class="card-grid"></div>
+        <button id="launch-btn" class="btn-primary launch-btn">LAUNCH DROPSHIP</button>
+      </section>
+    </div>
+  </div>
+
+  <!-- GAME SCREEN -->
+  <div id="game-screen" class="game-container hidden">
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Top Objective Bar -->
+    <div class="hud-top">
+      <div id="hud-mission-title" class="hud-mission-title">SECTOR</div>
+      <div id="hud-objective-text" class="hud-objective-text">Stand by...</div>
+    </div>
+
+    <!-- Bottom-Left Operative Status HUD -->
+    <div class="hud-bottom-left">
+      <div class="hp-bar-container">
+        <div id="hud-hp-fill" class="hp-bar-fill"></div>
+        <span id="hud-hp-text" class="hp-bar-text">100 / 100 HP</span>
+      </div>
+      <div class="hud-weapon-row">
+        <div class="hud-stat-box">
+          <span class="label">AMMO [R]</span>
+          <span id="hud-ammo-text" class="value">30 / 30</span>
+        </div>
+        <div class="hud-stat-box">
+          <span id="hud-skill-name" class="label">[SPACE] SKILL</span>
+          <span id="hud-skill-status" class="value skill-ready">READY</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom-Right Tactical Feed -->
+    <div id="hud-events" class="hud-events"></div>
+
+    <!-- Interactive Puzzle Modal -->
+    <div id="puzzle-modal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="puzzle-title">SECURITY TERMINAL</h3>
+          <button id="close-puzzle-btn" class="btn-close">✕ [ESC]</button>
+        </div>
+        <div id="puzzle-body" class="modal-body"></div>
+      </div>
+    </div>
+
+    <!-- Mission End Overlay -->
+    <div id="end-banner" class="modal-backdrop hidden">
+      <div class="modal-card center-card">
+        <h2 id="end-title">EXTRACTION COMPLETE</h2>
+        <p id="end-sub"></p>
+        <button id="return-lobby-btn" class="btn-primary">RETURN TO COMMAND LOBBY</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>
