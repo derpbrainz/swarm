@@ -34,9 +34,10 @@ export class IsometricRenderer {
 
     if (!state || !state.map) return;
 
-    if (this.lastMissionId !== state.map.mission_id && state.mission_time < 1.0) {
+    const mapKey = state.map.level_id || state.map.mission_id;
+    if (this.lastMissionId !== mapKey && state.mission_time < 1.0) {
       this.exploredCells.clear();
-      this.lastMissionId = state.map.mission_id;
+      this.lastMissionId = mapKey;
     }
 
     // 1. Compute active visibility polygons for all living players (Shared Team Vision)
@@ -45,7 +46,15 @@ export class IsometricRenderer {
     for (const p of state.players || []) {
       if (p.hp <= 0) continue;
       const cls = this.classesConfig[p.class_id];
-      const range = cls ? cls.sight_range : 12.5;
+      let range = cls ? cls.sight_range : 12.5;
+      const inv = p.inventory;
+      if (inv) {
+        const eq = inv.equipped || inv;
+        const hasLight =
+          (eq.quick_use && eq.quick_use.template_id === 'tactical_light') ||
+          (inv.storage || []).some((it) => it && it.template_id === 'tactical_light');
+        if (hasLight) range += 4.5;
+      }
       const poly = computeVisibilityPolygon(p.x, p.y, range, walls, 84);
       visions.push({ player: p, range, poly });
 
@@ -78,8 +87,10 @@ export class IsometricRenderer {
     this.drawSounds(ctx, state.sounds || [], camera);
     this.drawGroundDeployables(ctx, state.deployables || [], camera);
 
-    // 5. Draw Puzzle Terminals
+    // 5. Draw Puzzle Terminals, Supply Crates/Body Chests & Loot Pickups
     const localPlayer = (state.players || []).find((p) => p.id === localPlayerId);
+    this.drawLoot(ctx, state.map.loot || [], localPlayer, camera);
+    this.drawCrates(ctx, state.map.crates || [], localPlayer, camera);
     this.drawPuzzles(ctx, state.map.puzzles || [], localPlayer, camera);
 
     // 6. Depth-sorted 2.5D entities (walls, doors, turrets, enemies, players)
@@ -140,6 +151,10 @@ export class IsometricRenderer {
 
     // 8. Draw Shared Co-op Fog of War Overlay
     this.drawFogOfWar(ctx, state.map, visions, camera);
+
+    // 8b. Re-draw visible/nearby Loot & Crate HUD markers above fog/walls so items are always easy to spot
+    this.drawLoot(ctx, state.map.loot || [], localPlayer, camera, true);
+    this.drawCrates(ctx, state.map.crates || [], localPlayer, camera, true);
 
     // 9. Draw Crosshair at Mouse World Position
     if (mouseWorld && localPlayer && !localPlayer.downed) {
@@ -211,6 +226,149 @@ export class IsometricRenderer {
       ctx.font = '600 12px Inter, system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(`SECTOR 0${seg.index + 1}: ${seg.name.toUpperCase()}`, centerIso.x, centerIso.y);
+      ctx.restore();
+    }
+
+    // Draw flat grid-aligned connector threshold markings
+    for (const conn of map.connectors || []) {
+      const isVert = conn.dir === 'E' || conn.dir === 'W';
+      const cw = isVert ? 1.6 : 4.0;
+      const ch = isVert ? 4.0 : 1.6;
+      this.drawIsoQuad(
+        ctx,
+        conn.x - cw * 0.5,
+        conn.y - ch * 0.5,
+        cw,
+        ch,
+        camera,
+        'rgba(56, 189, 248, 0.14)',
+        'rgba(56, 189, 248, 0.45)'
+      );
+    }
+  }
+
+  drawLoot(ctx, lootItems, localPlayer, camera, overlayPass = false) {
+    const colors = {
+      medkit: '#22c55e',
+      stim_injector: '#4ade80',
+      ammo_pack: '#f59e0b',
+      heavy_ammo: '#fb923c',
+      credits: '#38bdf8',
+      isotope_cell: '#a855f7',
+      tactical_light: '#fde047',
+      portable_turret: '#38bdf8',
+      sonar_beacon: '#c084fc',
+      plasma_lmg: '#f87171',
+      rail_carbine: '#60a5fa',
+      service_pistol: '#94a3b8',
+      machine_pistol: '#fbbf24',
+      flare_revolver: '#fb7185',
+    };
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
+    for (const lt of lootItems) {
+      if (lt.collected) continue;
+      if (overlayPass && localPlayer) {
+        const d = Math.hypot(localPlayer.x - lt.x, localPlayer.y - lt.y);
+        const gx = Math.floor(lt.x / 2) * 2;
+        const gy = Math.floor(lt.y / 2) * 2;
+        if (d > 16.0 && !this.exploredCells.has(`${gx},${gy}`)) continue;
+      }
+      const iso = worldToIso(lt.x, lt.y, camera);
+      const itemKey = lt.type || lt.template_id || lt.item_type || 'credits';
+      const color = colors[itemKey] || '#38bdf8';
+      ctx.save();
+
+      // Glowing beacon ring under the item
+      ctx.beginPath();
+      ctx.ellipse(iso.x, iso.y, 14 + pulse * 4, 7 + pulse * 2, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.14)';
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Item case icon
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(iso.x - 10, iso.y - 16, 20, 14);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(iso.x - 10, iso.y - 16, 20, 14);
+
+      ctx.fillStyle = color;
+      ctx.fillRect(iso.x - 4, iso.y - 11, 8, 4);
+
+      const wStr = lt.weight ? ` (${lt.weight}wt)` : '';
+      const label = `${lt.name || itemKey.toUpperCase()}${wStr}`;
+      ctx.font = 'bold 11px Inter, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(6, 9, 15, 0.85)';
+      const tw = ctx.measureText(label).width + 8;
+      ctx.fillRect(iso.x - tw * 0.5, iso.y - 31, tw, 14);
+      ctx.fillStyle = color;
+      ctx.fillText(label, iso.x, iso.y - 20);
+
+      if (localPlayer && !localPlayer.downed) {
+        const dist = Math.hypot(localPlayer.x - lt.x, localPlayer.y - lt.y);
+        if (dist <= 2.8) {
+          ctx.fillStyle = '#fde047';
+          ctx.font = 'bold 12px monospace';
+          ctx.fillText('[PRESS E OR CLICK TO PICK UP]', iso.x, iso.y - 35);
+        }
+      }
+      ctx.restore();
+    }
+  }
+
+  drawCrates(ctx, crates, localPlayer, camera, overlayPass = false) {
+    for (const cr of crates) {
+      if (overlayPass && localPlayer) {
+        const d = Math.hypot(localPlayer.x - cr.x, localPlayer.y - cr.y);
+        const gx = Math.floor(cr.x / 2) * 2;
+        const gy = Math.floor(cr.y / 2) * 2;
+        if (d > 16.0 && !this.exploredCells.has(`${gx},${gy}`)) continue;
+      }
+      const items = cr.items || [];
+      const isBody = cr.type === 'body_chest';
+      const locked = Boolean(cr.locked);
+      const iso = worldToIso(cr.x, cr.y, camera);
+      const stroke = isBody ? '#f87171' : locked ? '#f59e0b' : '#38bdf8';
+      const fill = isBody ? '#450a0a' : locked ? '#451a03' : '#0f172a';
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(iso.x, iso.y, 22, 11, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.fillStyle = fill;
+      ctx.fillRect(iso.x - 15, iso.y - 20, 30, 20);
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(iso.x - 15, iso.y - 20, 30, 20);
+
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center';
+      const countText = items.length > 0 ? ` [${items.length} ITEMS]` : ' [EMPTY]';
+      const title = `${cr.name || cr.label || 'SUPPLY CRATE'}${countText}`;
+      const tw = ctx.measureText(title).width + 8;
+      ctx.fillStyle = 'rgba(6, 9, 15, 0.85)';
+      ctx.fillRect(iso.x - tw * 0.5, iso.y - 35, tw, 14);
+      ctx.fillStyle = stroke;
+      ctx.fillText(title, iso.x, iso.y - 24);
+
+      if (localPlayer && !localPlayer.downed) {
+        const dist = Math.hypot(localPlayer.x - cr.x, localPlayer.y - cr.y);
+        if (dist <= (cr.radius || 2.5) + 0.4) {
+          ctx.fillStyle = locked ? '#fbbf24' : '#38bdf8';
+          ctx.font = 'bold 12px monospace';
+          ctx.fillText(
+            locked ? '[PRESS E: SKILL CHECK TO UNLOCK]' : '[PRESS E: OPEN CHEST OVERLAY]',
+            iso.x,
+            iso.y - 39
+          );
+        }
+      }
       ctx.restore();
     }
   }

@@ -18,13 +18,13 @@ body {
 
 /* LOBBY STYLES */
 .lobby-container {
-  max-width: 1400px;
+  max-width: 1580px;
   height: 100vh;
   margin: 0 auto;
-  padding: 20px 28px;
+  padding: 16px 22px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .lobby-header {
@@ -73,8 +73,8 @@ body {
 
 .lobby-columns {
   display: grid;
-  grid-template-columns: 300px 1fr 380px;
-  gap: 18px;
+  grid-template-columns: 300px 1fr 400px;
+  gap: 16px;
   flex: 1;
   min-height: 0;
 }
@@ -496,4 +496,337 @@ body {
   border-radius: 6px;
   font-weight: 700;
   cursor: pointer;
+}
+
+/* INVENTORY, PORTRAIT, SHARED STASH & CHEST OVERLAY STYLES */
+.char-portrait-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: #111927;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.lobby-inv-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #111927;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+}
+
+.shared-stash-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #0f172a;
+  border: 1px dashed #334155;
+  border-radius: 8px;
+  padding: 8px;
+  min-height: 110px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.stash-item, .inv-storage-item, .chest-item-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #162133;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 0.76rem;
+  cursor: grab;
+}
+
+.stash-item:hover, .inv-storage-item:hover, .chest-item-card:hover {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.hud-inventory-sidebar {
+  position: absolute;
+  top: 76px;
+  right: 20px;
+  width: 290px;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  background: rgba(11, 17, 30, 0.94);
+  border: 2px solid #38bdf8;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.7);
+}
+
+.hud-inventory-sidebar.drag-target {
+  border-color: #fde047;
+  box-shadow: 0 0 16px rgba(253, 224, 71, 0.5);
+}
+
+.inv-sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #38bdf8;
+  border-bottom: 1px solid #1e293b;
+  padding-bottom: 4px;
+}
+
+.inv-weight-badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.15);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.inv-storage-title {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #94a3b8;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+  border-top: 1px solid #1e293b;
+  padding-top: 4px;
+}
+
+.inv-weight-bar-wrap {
+  height: 6px;
+  background: #1e293b;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.inv-weight-bar-fill {
+  height: 100%;
+  background: #38bdf8;
+  width: 0%;
+  transition: width 0.15s;
+}
+
+.inv-section-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #94a3b8;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+
+.inv-equipped-list, .inv-storage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.inv-slot-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 5px;
+  padding: 5px 8px;
+  font-size: 0.74rem;
+}
+
+.inv-slot-row.active-weapon {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.14);
+}
+
+.chest-items-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.mini-btn {
+  background: #1e293b;
+  color: #38bdf8;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mini-btn:hover {
+  background: #0284c7;
+  color: #fff;
+}
+
+
+/* LOBBY READ-ONLY LOOT LIST */
+.lobby-stash-readonly {
+  max-height: none;
+  flex: 1;
+}
+.lobby-stash-readonly .stash-item {
+  cursor: default;
+}
+
+/* CLASS SELECTION OVERLAY */
+.class-modal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+  max-height: calc(85vh - 80px);
+  overflow-y: auto;
+  padding: 4px;
+}
+.class-modal-grid .card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #111927;
+}
+
+/* PRE-MISSION PREPARATION SCREEN */
+.prep-container {
+  position: fixed;
+  inset: 0;
+  background: #06090f;
+  padding: 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 100;
+}
+.prep-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #1e293b;
+  padding-bottom: 10px;
+}
+.prep-header h1 {
+  font-size: 1.5rem;
+  color: #38bdf8;
+  letter-spacing: 2px;
+}
+.prep-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr minmax(360px, 1.1fr) 1fr;
+  grid-template-rows: 1fr 1fr;
+  grid-template-areas:
+    "p0 crate p1"
+    "p2 crate p3";
+  gap: 14px;
+}
+#prep-slot-0 { grid-area: p0; }
+#prep-slot-1 { grid-area: p1; }
+#prep-slot-2 { grid-area: p2; }
+#prep-slot-3 { grid-area: p3; }
+.prep-crate { grid-area: crate; min-height: 0; }
+
+.prep-crate-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  overflow-y: auto;
+  align-content: start;
+}
+.prep-crate-item {
+  background: #162133;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.prep-crate-item:hover {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.prep-player-slot {
+  min-height: 0;
+  display: flex;
+}
+.prep-player-card {
+  flex: 1;
+  background: #0b111e;
+  border: 2px solid #1e293b;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+.prep-player-card.is-me {
+  border-color: #38bdf8;
+}
+.prep-player-card.is-ready {
+  border-color: #22c55e;
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.25);
+}
+.prep-player-card.drag-target {
+  border-color: #fde047;
+  box-shadow: 0 0 14px rgba(253, 224, 71, 0.45);
+}
+.prep-empty-slot {
+  flex: 1;
+  border: 2px dashed #1e293b;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #334155;
+  font-size: 0.85rem;
+}
+.prep-inv-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+.prep-ready-btn {
+  margin-top: auto;
+  padding: 10px;
+  font-weight: 800;
+  border-radius: 6px;
+  border: 2px solid #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+  color: #4ade80;
+  cursor: pointer;
+}
+.prep-ready-btn.ready {
+  background: #16a34a;
+  color: #fff;
+}
+.prep-countdown {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12rem;
+  font-weight: 900;
+  color: #38bdf8;
+  text-shadow: 0 0 40px rgba(56, 189, 248, 0.6);
+  background: rgba(4, 7, 13, 0.55);
+  pointer-events: none;
+  z-index: 150;
 }

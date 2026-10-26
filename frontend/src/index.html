@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>VALKYRIE PROTOCOL — Isometric Co-op Extraction</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=20261026c" />
 </head>
 <body>
   <!-- LOBBY SCREEN -->
@@ -26,36 +26,73 @@
     </div>
 
     <div class="lobby-columns">
-      <!-- Left: Squad Roster -->
+      <!-- Left: Squad Roster & Class -->
       <section class="panel squad-panel">
         <h2>Squad Roster</h2>
         <div id="player-list" class="player-list"></div>
+        <button id="change-class-btn" type="button" class="btn-secondary" onclick="window.openClassModal && window.openClassModal()" style="border-color:#38bdf8;color:#38bdf8;cursor:pointer;">⇄ Change My Class</button>
         <div class="controls-guide">
           <h3>Tactical Controls</h3>
           <ul>
             <li><b>WASD / Arrows</b>: Continuous Movement</li>
             <li><b>Mouse Cursor</b>: Look &amp; Aim Weapon</li>
-            <li><b>Left Click</b>: Fire Weapon</li>
-            <li><b>R</b>: Reload Magazine</li>
-            <li><b>Space / Q</b>: Activate Class Skill</li>
-            <li><b>E</b>: Hack Terminal / Revive Teammate</li>
+            <li><b>Left Click</b>: Fire Active Weapon</li>
+            <li><b>1 / 2</b>: Switch Primary / Secondary Gun</li>
+            <li><b>R</b>: Reload • <b>Space</b>: Class Skill</li>
+            <li><b>F</b>: Quick-Use Item (Medkit/Turret)</li>
+            <li><b>E</b>: Pickup Item / Open Crate / Hack / Revive</li>
           </ul>
         </div>
       </section>
 
-      <!-- Middle: Character Class Selector -->
-      <section class="panel class-panel">
-        <h2>Select Operative Class</h2>
-        <div id="class-grid" class="card-grid"></div>
+      <!-- Middle: Shared Loot (information only, scrollable) -->
+      <section class="panel loadout-panel" id="loadout-panel">
+        <h2>Shared Squad Loot (Info)</h2>
+        <p style="font-size:0.74rem;color:#94a3b8;">Extracted loot stacks here. Items are assigned to characters in the Prepare to Launch screen.</p>
+        <div id="lobby-shared-stash" class="shared-stash-grid lobby-stash-readonly"></div>
       </section>
 
       <!-- Right: Leader Mission Selector -->
       <section class="panel mission-panel">
         <h2>Select Mission (Leader)</h2>
         <div id="mission-grid" class="card-grid"></div>
-        <button id="launch-btn" class="btn-primary launch-btn">LAUNCH DROPSHIP</button>
+        <button id="launch-btn" class="btn-primary launch-btn">PREPARE TO LAUNCH</button>
       </section>
     </div>
+  </div>
+
+  <!-- CLASS SELECTION OVERLAY (new players / change class) -->
+  <div id="class-modal" class="modal-backdrop hidden" style="position:fixed;z-index:200;">
+    <div class="modal-card" style="max-width:1100px;width:92vw;">
+      <div class="modal-header">
+        <h3>SELECT YOUR OPERATIVE CLASS</h3>
+        <button id="close-class-btn" class="btn-close">✕ Cancel</button>
+      </div>
+      <div id="class-grid" class="class-modal-grid"></div>
+    </div>
+  </div>
+
+  <!-- PRE-MISSION PREPARATION SCREEN -->
+  <div id="prep-screen" class="prep-container hidden">
+    <header class="prep-header">
+      <div>
+        <h1 id="prep-title">PREPARE TO LAUNCH</h1>
+        <p class="subtitle">Move items one at a time from the Squad Loot Crate to a character. Each operative clicks READY UP to start the 5-second launch countdown.</p>
+      </div>
+      <button id="prep-back-btn" class="btn-secondary">← Back to Lobby (Leader)</button>
+    </header>
+    <div class="prep-layout">
+      <div id="prep-slot-0" class="prep-player-slot"></div>
+      <div id="prep-slot-1" class="prep-player-slot"></div>
+      <section class="prep-crate panel">
+        <h2>SQUAD LOOT CRATE</h2>
+        <p style="font-size:0.75rem;color:#94a3b8;">Click an item to give it to your character, or drag it onto any operative's inventory.</p>
+        <div id="prep-crate-list" class="prep-crate-list"></div>
+      </section>
+      <div id="prep-slot-2" class="prep-player-slot"></div>
+      <div id="prep-slot-3" class="prep-player-slot"></div>
+    </div>
+    <div id="prep-countdown" class="prep-countdown hidden">5</div>
   </div>
 
   <!-- GAME SCREEN -->
@@ -86,8 +123,34 @@
       </div>
     </div>
 
+    <!-- Right-Side Player Inventory Sidebar -->
+    <aside id="hud-inventory-sidebar" class="hud-inventory-sidebar">
+      <div class="inv-sidebar-header">
+        <span>OPERATIVE INVENTORY</span>
+        <span id="hud-inv-weight" class="inv-weight-badge">0 / 24 WT</span>
+      </div>
+      <div class="inv-weight-bar-wrap">
+        <div id="hud-inv-weight-fill" class="inv-weight-bar-fill"></div>
+      </div>
+      <div id="hud-equipped-slots" class="inv-equipped-list"></div>
+      <div class="inv-storage-title">STORAGE (DRAG CHEST ITEMS HERE)</div>
+      <div id="hud-storage-list" class="inv-storage-list"></div>
+    </aside>
+
     <!-- Bottom-Right Tactical Feed -->
     <div id="hud-events" class="hud-events"></div>
+
+    <!-- Chest / Crate Loot Overlay Modal -->
+    <div id="chest-modal" class="modal-backdrop hidden" style="background:rgba(4,7,13,0.45);">
+      <div class="modal-card" style="min-width:420px;max-width:480px;">
+        <div class="modal-header">
+          <h3 id="chest-title">SUPPLY CRATE</h3>
+          <button id="close-chest-btn" class="btn-close">✕ [ESC]</button>
+        </div>
+        <p style="font-size:0.82rem;color:#94a3b8;">Drag items with your mouse to your Inventory Sidebar on the right (or click an item to transfer to storage):</p>
+        <div id="chest-body" class="chest-items-grid"></div>
+      </div>
+    </div>
 
     <!-- Interactive Puzzle Modal -->
     <div id="puzzle-modal" class="modal-backdrop hidden">
@@ -110,6 +173,6 @@
     </div>
   </div>
 
-  <script type="module" src="/static/js/main.js"></script>
+  <script type="module" src="/static/js/main.js?v=20261026c"></script>
 </body>
 </html>

@@ -12,13 +12,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.config.classes import CHARACTER_CLASSES, ENEMY_TYPES
 from backend.app.config.missions import MISSIONS
 from backend.app.engine.game_loop import GameRoom
+from backend.app.engine.level_store import level_store
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend" / "src"
 
@@ -45,11 +47,20 @@ async def broadcast_json(payload: dict[str, Any]) -> None:
 async def simulation_loop() -> None:
     tick_rate = 30.0
     dt = 1.0 / tick_rate
+    last_prep_sec = -1
     while True:
         try:
-            room.step(dt)
-            if clients:
-                await broadcast_json(room.get_snapshot())
+            if room.phase == "prep":
+                if room.prep_timer > 0.0:
+                    room.step(dt)
+                    cur_sec = int(room.prep_timer * 10)
+                    if clients and (room.phase != "prep" or cur_sec != last_prep_sec):
+                        last_prep_sec = cur_sec
+                        await broadcast_json(room.get_snapshot())
+            elif room.phase != "lobby":
+                room.step(dt)
+                if clients:
+                    await broadcast_json(room.get_snapshot())
         except Exception as exc:
             print(f"[SimLoop Error] {exc}")
         await asyncio.sleep(dt)
@@ -69,6 +80,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Alien Swarm Isometric Extraction Co-op", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
 @app.get("/api/config")
 async def get_config() -> JSONResponse:
     return JSONResponse(
@@ -76,8 +96,22 @@ async def get_config() -> JSONResponse:
             "classes": CHARACTER_CLASSES,
             "missions": MISSIONS,
             "enemies": ENEMY_TYPES,
+            "levels": level_store.list_levels(),
         }
     )
+
+
+@app.get("/api/levels")
+async def get_levels() -> JSONResponse:
+    return JSONResponse({"levels": level_store.list_levels()})
+
+
+@app.post("/api/levels/generate")
+async def generate_level(body: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
+    mission_id = str(body.get("mission_id", "outpost")) if body else "outpost"
+    seed = body.get("seed") if body else None
+    rec = level_store.generate_level(mission_id, seed=seed, tested=False)
+    return JSONResponse(rec)
 
 
 @app.websocket("/ws")
@@ -94,6 +128,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                 "player_id": player_id,
                 "classes": CHARACTER_CLASSES,
                 "missions": MISSIONS,
+                "levels": level_store.list_levels(),
                 "state": room.get_snapshot(),
             }
         )
@@ -115,12 +150,72 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                 await broadcast_json(room.get_snapshot())
 
             elif mtype == "select_mission":
-                room.select_mission(player_id, str(msg.get("mission_id", "outpost")))
+                level_id = msg.get("level_id") or msg.get("mission_id", "outpost")
+                if room.select_mission(player_id, str(level_id), enforce_unlock=True):
+                    if msg.get("prepare", True):
+                        room.prepare_mission(player_id)
                 await broadcast_json(room.get_snapshot())
 
-            elif mtype == "start_mission":
-                if room.start_mission(player_id):
+            elif mtype == "generate_level":
+                room.generate_level(player_id, msg.get("mission_id"), msg.get("seed"))
+                await broadcast_json(room.get_snapshot())
+
+            elif mtype == "prepare_mission":
+                if room.prepare_mission(player_id):
                     await broadcast_json(room.get_snapshot())
+
+            elif mtype == "start_mission":
+                if room.start_mission(player_id, force_test_mode=msg.get("test_mode")):
+                    await broadcast_json(room.get_snapshot())
+
+            elif mtype == "toggle_ready":
+                target_pid = str(msg.get("target_player_id") or player_id)
+                room.toggle_ready(target_pid, msg.get("ready"))
+                await broadcast_json(room.get_snapshot())
+
+            elif mtype == "min_loadout":
+                target_pid = str(msg.get("target_player_id") or player_id)
+                room.restore_min_loadout(target_pid)
+                await broadcast_json(room.get_snapshot())
+
+            elif mtype == "stash_to_player":
+                res = room.stash_to_player(
+                    player_id,
+                    str(msg.get("template_id", "")),
+                    msg.get("target_slot"),
+                    msg.get("target_player_id"),
+                )
+                await ws.send_text(json.dumps({"type": "inventory_feedback", **res}))
+                await broadcast_json(room.get_snapshot())
+
+            elif mtype == "player_to_stash":
+                res = room.player_to_stash(
+                    player_id,
+                    str(msg.get("item_id", "")),
+                    msg.get("target_player_id"),
+                )
+                await ws.send_text(json.dumps({"type": "inventory_feedback", **res}))
+                await broadcast_json(room.get_snapshot())
+
+            elif mtype == "inventory_action":
+                res = room.handle_inventory_action(player_id, msg)
+                await ws.send_text(json.dumps({"type": "inventory_feedback", **res}))
+                await broadcast_json(room.get_snapshot())
+
+            elif mtype == "pickup_item":
+                item_id = str(msg.get("item_id", ""))
+                room.pickup_ground_item(player_id, item_id)
+                await broadcast_json(room.get_snapshot())
+
+            elif mtype == "take_crate_item":
+                res = room.take_crate_item(
+                    player_id,
+                    str(msg.get("crate_id", "")),
+                    str(msg.get("item_id", "")),
+                    msg.get("target_slot"),
+                )
+                await ws.send_text(json.dumps({"type": "chest_update", **res}))
+                await broadcast_json(room.get_snapshot())
 
             elif mtype == "return_lobby":
                 if player_id == room.leader_id or room.phase in ("victory", "defeat"):
@@ -145,10 +240,14 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                                 "type": "interact_result",
                                 "interact_type": res.get("type"),
                                 "puzzle": res.get("puzzle"),
+                                "crate": res.get("crate"),
+                                "item": res.get("item"),
+                                "message": res.get("message"),
                                 "target_id": res.get("target_id"),
                             }
                         )
                     )
+                    await broadcast_json(room.get_snapshot())
 
             elif mtype == "puzzle_action":
                 res = room.handle_puzzle_action(
