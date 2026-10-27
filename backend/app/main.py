@@ -29,6 +29,20 @@ clients: dict[str, WebSocket] = {}
 _loop_task: asyncio.Task | None = None
 
 
+async def broadcast_snapshots() -> None:
+    if not clients:
+        return
+    stale: list[str] = []
+    for pid, ws in list(clients.items()):
+        try:
+            snap = room.get_snapshot(listener_id=pid)
+            await ws.send_text(json.dumps(snap))
+        except Exception:
+            stale.append(pid)
+    for pid in stale:
+        clients.pop(pid, None)
+        room.remove_player(pid)
+
 async def broadcast_json(payload: dict[str, Any]) -> None:
     if not clients:
         return
@@ -56,11 +70,11 @@ async def simulation_loop() -> None:
                     cur_sec = int(room.prep_timer * 10)
                     if clients and (room.phase != "prep" or cur_sec != last_prep_sec):
                         last_prep_sec = cur_sec
-                        await broadcast_json(room.get_snapshot())
+                        await broadcast_snapshots()
             elif room.phase != "lobby":
                 room.step(dt)
                 if clients:
-                    await broadcast_json(room.get_snapshot())
+                    await broadcast_snapshots()
         except Exception as exc:
             print(f"[SimLoop Error] {exc}")
         await asyncio.sleep(dt)
@@ -133,7 +147,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
             }
         )
     )
-    await broadcast_json(room.get_snapshot())
+    await broadcast_snapshots()
 
     try:
         while True:
@@ -143,40 +157,40 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 
             if mtype == "set_name":
                 room.set_player_name(player_id, str(msg.get("name", "")))
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
             elif mtype == "select_class":
                 room.select_class(player_id, str(msg.get("class_id", "vanguard")))
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
             elif mtype == "select_mission":
                 level_id = msg.get("level_id") or msg.get("mission_id", "outpost")
                 if room.select_mission(player_id, str(level_id), enforce_unlock=True):
                     if msg.get("prepare", True):
                         room.prepare_mission(player_id)
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
             elif mtype == "generate_level":
                 room.generate_level(player_id, msg.get("mission_id"), msg.get("seed"))
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
             elif mtype == "prepare_mission":
                 if room.prepare_mission(player_id):
-                    await broadcast_json(room.get_snapshot())
+                    await broadcast_snapshots()
 
             elif mtype == "start_mission":
                 if room.start_mission(player_id, force_test_mode=msg.get("test_mode")):
-                    await broadcast_json(room.get_snapshot())
+                    await broadcast_snapshots()
 
             elif mtype == "toggle_ready":
                 target_pid = str(msg.get("target_player_id") or player_id)
                 room.toggle_ready(target_pid, msg.get("ready"))
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
             elif mtype == "min_loadout":
                 target_pid = str(msg.get("target_player_id") or player_id)
                 room.restore_min_loadout(target_pid)
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
             elif mtype == "stash_to_player":
                 res = room.stash_to_player(
@@ -186,7 +200,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                     msg.get("target_player_id"),
                 )
                 await ws.send_text(json.dumps({"type": "inventory_feedback", **res}))
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
             elif mtype == "player_to_stash":
                 res = room.player_to_stash(
@@ -195,17 +209,17 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                     msg.get("target_player_id"),
                 )
                 await ws.send_text(json.dumps({"type": "inventory_feedback", **res}))
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
             elif mtype == "inventory_action":
                 res = room.handle_inventory_action(player_id, msg)
                 await ws.send_text(json.dumps({"type": "inventory_feedback", **res}))
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
             elif mtype == "pickup_item":
                 item_id = str(msg.get("item_id", ""))
                 room.pickup_ground_item(player_id, item_id)
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
             elif mtype == "take_crate_item":
                 res = room.take_crate_item(
@@ -215,12 +229,12 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                     msg.get("target_slot"),
                 )
                 await ws.send_text(json.dumps({"type": "chest_update", **res}))
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
             elif mtype == "return_lobby":
                 if player_id == room.leader_id or room.phase in ("victory", "defeat"):
                     room.reset_to_lobby()
-                    await broadcast_json(room.get_snapshot())
+                    await broadcast_snapshots()
 
             elif mtype == "input":
                 room.update_input(player_id, msg)
@@ -247,7 +261,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                             }
                         )
                     )
-                    await broadcast_json(room.get_snapshot())
+                    await broadcast_snapshots()
 
             elif mtype == "puzzle_action":
                 res = room.handle_puzzle_action(
@@ -256,17 +270,18 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                     msg.get("action", {}),
                 )
                 await ws.send_text(json.dumps({"type": "puzzle_update", **res}))
-                await broadcast_json(room.get_snapshot())
+                await broadcast_snapshots()
 
     except WebSocketDisconnect:
         pass
     finally:
         clients.pop(player_id, None)
         room.remove_player(player_id)
-        await broadcast_json(room.get_snapshot())
+        await broadcast_snapshots()
 
 
 if FRONTEND_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR / "assets")), name="assets")
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 

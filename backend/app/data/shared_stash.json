@@ -1,14 +1,14 @@
 {
   "medkit": 4,
   "stim_injector": 3,
-  "ammo_pack": 5,
+  "ammo_pack": 6,
   "heavy_ammo": 2,
-  "tactical_light": 4,
-  "portable_turret": 4,
+  "tactical_light": 21,
+  "portable_turret": 17,
   "sonar_beacon": 2,
-  "plasma_lmg": 1,
-  "rail_carbine": 1,
+  "plasma_lmg": 3,
+  "rail_carbine": 3,
   "machine_pistol": 2,
-  "flare_revolver": 4,
+  "flare_revolver": 9,
   "service_pistol": 2
 }

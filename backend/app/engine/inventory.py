@@ -112,8 +112,38 @@ def get_active_weapon_config(player: dict[str, Any], default_weapon: dict[str, A
     slot = inv.get("active_weapon_slot", "primary_weapon")
     item = inv["equipped"].get(slot) or inv["equipped"].get("primary_weapon") or inv["equipped"].get("secondary_weapon")
     if item and "weapon" in item:
-        return item["weapon"]
+        cfg = dict(item["weapon"])
+        cfg["name"] = item.get("name", default_weapon.get("name", ""))
+        cfg["template_id"] = item.get("template_id", "")
+        return cfg
     return default_weapon
+
+
+def is_light_weapon(player: dict[str, Any], default_weapon: dict[str, Any] | None = None) -> bool:
+    """Returns True if the active equipped weapon is a light sidearm (e.g. pistol, revolver)."""
+    inv = player.get("inventory")
+    if not inv:
+        return True
+    slot = inv.get("active_weapon_slot", "primary_weapon")
+    if slot == "secondary_weapon":
+        return True
+    item = inv.get("equipped", {}).get(slot)
+    if not item:
+        cfg = default_weapon or {}
+        name = cfg.get("name", "").lower()
+        tid = cfg.get("template_id", "").lower()
+        return "pistol" in name or "revolver" in name or "pistol" in tid or "revolver" in tid
+    w_name = item.get("name", "").lower()
+    t_id = item.get("template_id", "").lower()
+    cat = item.get("category", "")
+    return (
+        cat == "secondary_weapon"
+        or "pistol" in w_name
+        or "revolver" in w_name
+        or "pistol" in t_id
+        or "revolver" in t_id
+        or int(item.get("weight", 99)) <= 3
+    )
 
 
 def has_tactical_light(player: dict[str, Any]) -> bool:

@@ -410,7 +410,7 @@ def test_prep_screen_countdown_and_level_items():
     # Every persisted combat level has ground items and supply crates
     for rec in level_store.levels.values():
         mt = rec["map_template"]
-        assert len(mt.get("loot", [])) >= 15
+        assert len(mt.get("loot", [])) >= 5
         assert len(mt.get("crates", [])) >= 3
         assert all("type" in lt for lt in mt["loot"])
 
@@ -449,3 +449,88 @@ def test_prep_screen_countdown_and_level_items():
     assert room.phase in ("dropship", "active")
     assert any(it["id"] == light["id"] for it in p2["inventory"]["storage"])
     _reset_room()
+
+
+def test_sprint_mechanic_and_noise_and_enemy_sight():
+    from backend.app.config.classes import CHARACTER_CLASSES, ENEMY_TYPES
+    from backend.app.engine.inventory import is_light_weapon
+
+    # 1. Verify enemy sight ranges are reduced
+    assert ENEMY_TYPES["stalker"]["sight_range"] <= 10.0
+    assert ENEMY_TYPES["spitter"]["sight_range"] <= 12.0
+    assert ENEMY_TYPES["brute"]["sight_range"] <= 8.5
+
+    # 2. Verify base speed is slowed and sprint_speed is configured
+    assert CHARACTER_CLASSES["vanguard"]["speed"] <= 3.5
+    assert CHARACTER_CLASSES["vanguard"]["sprint_speed"] > CHARACTER_CLASSES["vanguard"]["speed"]
+
+    _reset_room()
+    p = room.add_player("p_test", "Tester")
+    room.select_class("p_test", "vanguard")
+    room.select_mission("p_test", "outpost_101")
+    room.prepare_mission("p_test")
+    room.toggle_ready("p_test")
+    for _ in range(6):
+        room.step(1.0)
+    # Ensure active mission
+    room.dropship_timer = 0.0
+    room.step(0.1)
+    assert room.phase == "active"
+
+    # Aim East (angle = 0)
+    room.update_input("p_test", {"aim_x": p["x"] + 10.0, "aim_y": p["y"], "dx": 1.0, "dy": 0.0, "running": False})
+    room.step(0.1)
+    walk_vx = p["vx"]
+    assert p["running"] is False
+    assert 2.5 <= walk_vx <= 3.5
+
+    # Footstep emitted during walk is quieter
+    p["footstep_timer"] = 0.0
+    room.sound_events.clear()
+    room.step(0.1)
+    walk_sounds = [s for s in room.sound_events if s.get("kind") == "footstep"]
+    assert walk_sounds and walk_sounds[0]["radius"] <= 2.5
+
+    # Sprint forward (aim East, input East, running=True)
+    room.update_input("p_test", {"aim_x": p["x"] + 10.0, "aim_y": p["y"], "dx": 1.0, "dy": 0.0, "running": True})
+    room.step(0.1)
+    assert p["running"] is True
+    sprint_vx = p["vx"]
+    assert sprint_vx >= 4.8  # Sprint speed is significantly faster
+
+    # Footstep emitted during sprint is louder
+    p["footstep_timer"] = 0.0
+    room.sound_events.clear()
+    room.step(0.1)
+    sprint_sounds = [s for s in room.sound_events if s.get("kind") == "footstep"]
+    assert sprint_sounds and sprint_sounds[0]["radius"] >= 5.0
+    assert sprint_sounds[0]["radius"] > walk_sounds[0]["radius"] * 2.0
+
+    # Running backward while aiming forward does NOT engage sprint
+    room.update_input("p_test", {"aim_x": p["x"] + 10.0, "aim_y": p["y"], "dx": -1.0, "dy": 0.0, "running": True})
+    room.step(0.1)
+    assert p["running"] is False  # Cannot sprint backwards!
+    assert p["vx"] < 0 and abs(p["vx"]) <= 3.5  # Moves at walk speed
+
+    # Weapon firing restriction while sprinting:
+    # Vanguard active weapon is Breaching Shotgun (heavy/primary)
+    assert is_light_weapon(p) is False
+    # Aim and try to fire shotgun while sprinting forward
+    p["ammo"] = 6
+    room.projectiles.clear()
+    room.update_input("p_test", {"aim_x": p["x"] + 10.0, "aim_y": p["y"], "dx": 1.0, "dy": 0.0, "running": True, "firing": True})
+    room.step(0.1)
+    assert p["ammo"] == 6
+    assert len(room.projectiles) == 0  # Blocked!
+
+    # Switch to Service Pistol (light/secondary)
+    room.handle_inventory_action("p_test", {"action": "switch_weapon", "slot": "secondary_weapon"})
+    assert is_light_weapon(p) is True
+    p["ammo"] = 12
+    room.update_input("p_test", {"aim_x": p["x"] + 10.0, "aim_y": p["y"], "dx": 1.0, "dy": 0.0, "running": True, "firing": True})
+    room.step(0.1)
+    assert p["ammo"] < 12
+    assert len(room.projectiles) > 0  # Pistol CAN fire while sprinting!
+
+    _reset_room()
+

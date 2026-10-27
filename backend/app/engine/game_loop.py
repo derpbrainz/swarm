@@ -23,6 +23,7 @@ from backend.app.engine.inventory import (
     equip_item_from_storage,
     get_active_weapon_config,
     has_tactical_light,
+    is_light_weapon,
     recalc_inventory,
     remove_item_from_player,
     return_non_starter_items,
@@ -31,6 +32,8 @@ from backend.app.engine.inventory import (
 )
 from backend.app.engine.level_store import level_store
 from backend.app.engine.map_builder import build_mission_map
+from backend.app.engine.audio_events import create_audio_event
+from backend.app.engine.sound_occlusion import calculate_occlusion
 from backend.app.engine.physics import (
     circle_vs_aabb,
     has_line_of_sight,
@@ -55,6 +58,7 @@ class GameRoom:
         self.prep_timer: float = 0.0
         self.dropship_timer: float = 0.0
         self.mission_time: float = 0.0
+        self._music_start_t: float = time.time()
 
         self.map_data: dict[str, Any] | None = None
         self.projectiles: list[dict[str, Any]] = []
@@ -93,6 +97,7 @@ class GameRoom:
             "skill_timer": 0.0,
             "skill_active": None,
             "footstep_timer": 0.0,
+            "running": False,
             "downed": False,
             "body_dropped": False,
             "extracted": False,
@@ -104,6 +109,7 @@ class GameRoom:
                 "aim_x": 10.0,
                 "aim_y": 8.0,
                 "firing": False,
+                "running": False,
             },
         }
         self.players[player_id] = player
@@ -345,6 +351,8 @@ class GameRoom:
             inp["aim_y"] = float(data["aim_y"])
         if "firing" in data:
             inp["firing"] = bool(data["firing"])
+        if "running" in data:
+            inp["running"] = bool(data["running"])
 
     def trigger_reload(self, player_id: str) -> None:
         p = self.players.get(player_id)
@@ -352,7 +360,11 @@ class GameRoom:
             return
         if p["ammo"] < p["max_ammo"]:
             cls_cfg = CHARACTER_CLASSES[p["class_id"]]
-            p["reload_timer"] = float(cls_cfg["weapon"]["reload_time"])
+            w_cfg = get_active_weapon_config(p, cls_cfg["weapon"])
+            p["reload_timer"] = float(w_cfg.get("reload_time", cls_cfg["weapon"]["reload_time"]))
+            w_name = w_cfg.get("name", "").lower()
+            rel_type = "weapon_reload_shotgun" if "shotgun" in w_name else ("weapon_reload_plasma" if "plasma" in w_name else ("weapon_reload_pistol" if "pistol" in w_name else "weapon_reload_machinegun"))
+            self._emit_sound(p["x"], p["y"], 12.0, "reload", sound_type=rel_type)
 
     def trigger_skill(self, player_id: str) -> bool:
         p = self.players.get(player_id)
@@ -528,7 +540,7 @@ class GameRoom:
         crate = next((c for c in self.map_data.get("crates", []) if c["id"] == crate_id), None)
         if not crate or crate.get("locked"):
             return {"ok": False, "message": "Crate is locked or unavailable"}
-        if math.hypot(crate["x"] - p["x"], crate["y"] - p["y"]) > float(crate.get("radius", 2.5)) + 1.8:
+        if math.hypot(crate["x"] - p["x"], crate["y"] - p["y"]) > float(crate.get("radius", 2.5)) + 3.0:
             return {"ok": False, "message": "Too far from chest"}
         item_idx = next((i for i, it in enumerate(crate.get("items", [])) if it["id"] == item_id), None)
         if item_idx is None:
@@ -735,7 +747,7 @@ class GameRoom:
                 self.map_data["extraction_zone"]["active"] = True
                 self.events_log.append("All mission objectives complete! Proceed to the Extraction Pad!")
 
-    def _emit_sound(self, x: float, y: float, radius: float, kind: str = "gunfire") -> None:
+    def _emit_sound(self, x: float, y: float, radius: float, kind: str = "gunfire", sound_type: str = "", source_id: str = "") -> None:
         evt = {
             "id": uuid.uuid4().hex[:8],
             "x": x,
@@ -743,7 +755,14 @@ class GameRoom:
             "radius": radius,
             "kind": kind,
             "ttl": 0.45,
+            "source_id": source_id,
         }
+        if sound_type:
+            try:
+                audio_evt = create_audio_event(sound_type, x, y, source_id=source_id)
+                evt.update(audio_evt)
+            except Exception:
+                pass
         self.sound_events.append(evt)
         self.recent_sounds.append(dict(evt))
 
@@ -813,26 +832,58 @@ class GameRoom:
                 dx /= mag
                 dy /= mag
 
-            spd = float(cls_cfg["speed"])
-            p["vx"] = dx * spd
-            p["vy"] = dy * spd
-
-            if abs(dx) > 0.01 or abs(dy) > 0.01:
-                nx, ny = move_with_collisions(p["x"], p["y"], p["vx"], p["vy"], dt, p["radius"], walls)
-                p["x"], p["y"] = nx, ny
-                p["footstep_timer"] -= dt
-                if p["footstep_timer"] <= 0.0:
-                    p["footstep_timer"] = 0.42
-                    self._emit_sound(p["x"], p["y"], float(cls_cfg["footstep_radius"]), "footstep")
-
             # Aim angle toward mouse world coordinates
             aim_dx = float(inp["aim_x"]) - p["x"]
             aim_dy = float(inp["aim_y"]) - p["y"]
             if abs(aim_dx) > 1e-4 or abs(aim_dy) > 1e-4:
                 p["angle"] = math.atan2(aim_dy, aim_dx)
 
-            # Firing weapon
-            if inp.get("firing") and p["fire_cooldown"] <= 0.0 and p["reload_timer"] <= 0.0:
+            want_run = bool(inp.get("running", False))
+            is_running = False
+
+            if mag > 0.05:
+                # Forward vector pointing in operative's facing/aim angle
+                fwd_x = math.cos(p["angle"])
+                fwd_y = math.sin(p["angle"])
+                norm_dx = dx / mag
+                norm_dy = dy / mag
+                fwd_dot = norm_dx * fwd_x + norm_dy * fwd_y
+
+                # Running mechanism: only permitted when moving forward (fwd_dot > 0.20)
+                # When running, movement is locked strictly forward along facing direction
+                if want_run and fwd_dot > 0.20:
+                    is_running = True
+                    sprint_spd = float(cls_cfg.get("sprint_speed", float(cls_cfg["speed"]) * 1.7))
+                    p["vx"] = fwd_x * sprint_spd
+                    p["vy"] = fwd_y * sprint_spd
+                else:
+                    walk_spd = float(cls_cfg["speed"])
+                    p["vx"] = dx * walk_spd
+                    p["vy"] = dy * walk_spd
+            else:
+                p["vx"] = 0.0
+                p["vy"] = 0.0
+
+            p["running"] = is_running
+
+            if abs(p["vx"]) > 0.01 or abs(p["vy"]) > 0.01:
+                nx, ny = move_with_collisions(p["x"], p["y"], p["vx"], p["vy"], dt, p["radius"], walls)
+                p["x"], p["y"] = nx, ny
+                p["footstep_timer"] -= dt
+                if p["footstep_timer"] <= 0.0:
+                    base_noise = float(cls_cfg.get("footstep_radius", 3.0))
+                    if is_running:
+                        p["footstep_timer"] = 0.28
+                        # Running is louder (approx 2.2x noise radius)
+                        self._emit_sound(p["x"], p["y"], base_noise * 2.2, "footstep", sound_type="player_footstep")
+                    else:
+                        p["footstep_timer"] = 0.52
+                        # Walking generates less noise (approx 0.5x noise radius)
+                        self._emit_sound(p["x"], p["y"], base_noise * 0.5, "footstep", sound_type="player_footstep")
+
+            # Firing weapon: When running, player can only shoot if using a light weapon (like a pistol)
+            can_fire = not is_running or is_light_weapon(p, w_cfg)
+            if inp.get("firing") and can_fire and p["fire_cooldown"] <= 0.0 and p["reload_timer"] <= 0.0:
                 if p["ammo"] > 0:
                     p["ammo"] -= 1
                     p["fire_cooldown"] = 1.0 / float(w_cfg["fire_rate"])
@@ -858,7 +909,9 @@ class GameRoom:
                                 "radius": 0.16,
                             }
                         )
-                    self._emit_sound(p["x"], p["y"], float(w_cfg["sound_radius"]), "gunfire")
+                    w_name = w_cfg.get("name", "").lower()
+                    st = "weapon_fire_shotgun" if "shotgun" in w_name else ("weapon_fire_plasma" if "plasma" in w_name else ("weapon_fire_pistol" if "pistol" in w_name else "weapon_fire_machinegun"))
+                    self._emit_sound(p["x"], p["y"], float(w_cfg["sound_radius"]), "gunfire", sound_type=st, source_id=p["id"])
                     if p["ammo"] == 0:
                         p["reload_timer"] = float(w_cfg["reload_time"])
 
@@ -896,7 +949,7 @@ class GameRoom:
                                 "radius": 0.14,
                             }
                         )
-                        self._emit_sound(dep["x"], dep["y"], 7.5, "gunfire")
+                        self._emit_sound(dep["x"], dep["y"], 7.5, "gunfire", sound_type="weapon_fire_machinegun")
 
             elif dep["type"] == "nano_field":
                 dep["heal_tick"] -= dt
@@ -1017,7 +1070,7 @@ class GameRoom:
                         f"Squad extracted! {banked} items deposited into Shared Chest & next level unlocked!"
                     )
 
-    def get_snapshot(self) -> dict[str, Any]:
+    def get_snapshot(self, listener_id: str | None = None) -> dict[str, Any]:
         """
         Builds a serialized state snapshot for connected browser clients.
         Shared Co-op Vision: enemies are included with a `visible` flag indicating if at least
@@ -1083,9 +1136,62 @@ class GameRoom:
                 }
             )
 
+                # Music State determination (explore vs combat vs extraction)
+        music_state = "explore"
+        if self.phase in ("victory", "defeat"):
+            music_state = "lobby"
+        elif self.map_data.get("extraction_zone", {}).get("active", False):
+            music_state = "combat"
+        else:
+            # Check if any alive enemy is actively targeting a player
+            for e in self.map_data.get("enemies", []):
+                if e.get("hp", 0) > 0 and e.get("state") in ("aggro", "chase", "attacking"):
+                    music_state = "combat"
+                    break
+
+        # Process per-listener spatial & occluded audio events for newly created sounds
+        processed_audio_events = []
+        listener = self.players.get(listener_id) if listener_id else None
+        lx, ly = (listener["x"], listener["y"]) if listener else (0.0, 0.0)
+
+        for s in self.sound_events:
+            st = s.get("sound_type")
+            if not st:
+                continue
+            sx, sy = s.get("x", 0.0), s.get("y", 0.0)
+            if listener:
+                dist = math.hypot(sx - lx, sy - ly)
+                rmax = s.get("radius_max", 35.0)
+                if dist > rmax:
+                    continue  # culled outside hearing range
+                if s.get("occlude", True) and self.map_data:
+                    gain_mult, lpf, blocks = calculate_occlusion(sx, sy, lx, ly, walls)
+                else:
+                    gain_mult, lpf, blocks = 1.0, 20000.0, 0
+            else:
+                gain_mult, lpf, blocks = 1.0, 20000.0, 0
+
+            processed_audio_events.append({
+                "sound_type": st,
+                "source_id": s.get("source_id", ""),
+                "x": round(sx, 2),
+                "y": round(sy, 2),
+                "radius_min": s.get("radius_min", 2.0),
+                "radius_max": s.get("radius_max", 25.0),
+                "base_gain": s.get("base_gain", 1.0),
+                "occl_gain": round(gain_mult, 3),
+                "lpf_cutoff": round(lpf, 1),
+            })
+
         return {
             "type": "state",
             "phase": self.phase,
+            "music": {
+                "state": music_state,
+                "bpm": 118,
+                "start_t": getattr(self, "_music_start_t", 0.0),
+            },
+            "audio_events": processed_audio_events,
             "dropship_timer": round(self.dropship_timer, 1),
             "mission_time": round(self.mission_time, 1),
             "leader_id": self.leader_id,
@@ -1107,6 +1213,7 @@ class GameRoom:
                 "connectors": self.map_data.get("connectors", []),
                 "walls": self.map_data["walls"],
                 "puzzles": self.map_data["puzzles"],
+                "wires": self.map_data.get("wires", []),
                 "loot": [lt for lt in self.map_data.get("loot", []) if not lt.get("collected")],
                 "crates": self.map_data.get("crates", []),
                 "spaceship": self.map_data["spaceship"],

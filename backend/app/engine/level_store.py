@@ -23,7 +23,7 @@ class LevelStore:
                 for rec in loaded.values():
                     mt = rec.get("map_template", {})
                     lt_list = mt.get("loot", [])
-                    if len(lt_list) < 18 or not mt.get("crates") or (lt_list and "type" not in lt_list[0]):
+                    if len(lt_list) < 5 or not mt.get("crates") or (lt_list and "type" not in lt_list[0]):
                         outdated = True
                         break
                 if not outdated:

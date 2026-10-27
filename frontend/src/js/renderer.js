@@ -14,6 +14,9 @@ export class IsometricRenderer {
     this.lastMissionId = null;
     this.fogCanvas = document.createElement('canvas');
     this.fogCtx = this.fogCanvas.getContext('2d');
+    this.playerAnim = new Map();
+    this.lastRenderTime = 0;
+    this.currentDt = 0.016;
   }
 
   resetExplored() {
@@ -28,6 +31,10 @@ export class IsometricRenderer {
     const ctx = this.ctx;
     const W = this.canvas.width;
     const H = this.canvas.height;
+
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    this.currentDt = this.lastRenderTime ? Math.min(0.1, Math.max(0.001, (now - this.lastRenderTime) / 1000)) : 0.016;
+    this.lastRenderTime = now;
 
     ctx.fillStyle = '#05080e';
     ctx.fillRect(0, 0, W, H);
@@ -74,6 +81,11 @@ export class IsometricRenderer {
 
     // 2. Draw floor segments & grid
     this.drawFloorSegments(ctx, state.map, camera);
+
+    // 2b. Draw floor wiring from puzzle consoles to bulkhead doors
+    if (state.map.wires && state.map.wires.length > 0) {
+      this.drawWires(ctx, state.map.wires, camera);
+    }
 
     // 3. Draw Docked Spaceship & Extraction Zone
     if (state.map.spaceship) {
@@ -442,7 +454,7 @@ export class IsometricRenderer {
     for (const pz of puzzles) {
       const iso = worldToIso(pz.x, pz.y, camera);
       const isSolved = pz.solved;
-      const color = isSolved ? '#10b981' : '#f59e0b';
+      const color = isSolved ? '#10b981' : (pz.color || '#f59e0b');
 
       // Interaction ring
       ctx.save();
@@ -471,6 +483,67 @@ export class IsometricRenderer {
           ctx.fillText('[PRESS E TO HACK]', iso.x, iso.y - 44);
         }
       }
+      ctx.restore();
+    }
+  }
+
+  drawWires(ctx, wires, camera) {
+    for (const wire of wires) {
+      if (!wire.path || wire.path.length < 2) continue;
+      const wireCol = wire.color || '#f59e0b';
+      ctx.save();
+
+      // Convert path coordinates into isometric screen points
+      const pts = wire.path.map((p) => worldToIso(p[0], p[1], camera));
+
+      // 1. Dark backing conduit
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        if (i === 0) ctx.moveTo(pts[i].x, pts[i].y);
+        else ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      ctx.strokeStyle = '#050811';
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+
+      // 2. Continuous primary color base wire
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        if (i === 0) ctx.moveTo(pts[i].x, pts[i].y);
+        else ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      ctx.strokeStyle = wireCol;
+      ctx.lineWidth = 3.5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+
+      // 3. Repeating black hazard / warning stripes running ACROSS the wire
+      // Using setLineDash on top of the colored wire creates alternating colored / black bands across the cable
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        if (i === 0) ctx.moveTo(pts[i].x, pts[i].y);
+        else ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 3.5;
+      ctx.setLineDash([5, 5]); // 5px black stripe, 5px colored band across the wire
+      ctx.lineCap = 'butt';
+      ctx.stroke();
+
+      // 4. Subtle side edges for cable depth
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        if (i === 0) ctx.moveTo(pts[i].x, pts[i].y);
+        else ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+      ctx.lineWidth = 5;
+      ctx.stroke();
+
       ctx.restore();
     }
   }
@@ -568,10 +641,11 @@ export class IsometricRenderer {
     let strokeColor = '#475569';
 
     if (wall.type === 'door') {
-      topColor = '#b45309';
-      leftColor = '#92400e';
-      rightColor = '#78350f';
-      strokeColor = '#f59e0b';
+      const baseCol = wall.color || '#f59e0b';
+      topColor = baseCol;
+      leftColor = baseCol;
+      rightColor = '#0f172a';
+      strokeColor = baseCol;
     } else if (wall.type === 'ship_hull') {
       topColor = '#1d4ed8';
       leftColor = '#1e40af';
@@ -684,73 +758,413 @@ export class IsometricRenderer {
     const iso = worldToIso(player.x, player.y, camera);
     const cls = this.classesConfig[player.class_id] || {};
     const color = cls.color || '#38bdf8';
+    const dt = this.currentDt || 0.016;
 
     ctx.save();
 
-    // Ground circle
+    // 1. Tactical Ground Ring / Shadow
     ctx.beginPath();
-    ctx.ellipse(iso.x, iso.y, 15, 8, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.ellipse(iso.x, iso.y, 14, 7, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.52)';
     ctx.fill();
-    ctx.strokeStyle = isLocal ? '#38bdf8' : color;
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = isLocal ? '#38bdf8' : (player.downed ? '#ef4444' : 'rgba(255, 255, 255, 0.45)');
+    ctx.lineWidth = isLocal ? 2 : 1;
     ctx.stroke();
 
-    // Active Vanguard Shockwave Shield visual
+    // 2. Active Vanguard Shockwave Shield
     if (player.skill_active === 'shockwave_shield') {
       ctx.beginPath();
-      ctx.ellipse(iso.x, iso.y - 12, 26, 16, 0, 0, Math.PI * 2);
+      ctx.ellipse(iso.x, iso.y - 14, 26, 16, 0, 0, Math.PI * 2);
       ctx.strokeStyle = '#f87171';
       ctx.lineWidth = 3;
       ctx.stroke();
     }
 
-    // Aim laser line for local player
-    if (isLocal && !player.downed && mouseWorld) {
-      const mIso = worldToIso(mouseWorld.x, mouseWorld.y, camera);
-      ctx.beginPath();
-      ctx.moveTo(iso.x, iso.y - 16);
-      ctx.lineTo(mIso.x, mIso.y);
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.28)';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+    // 3. Animation State Tracking per Player
+    let anim = this.playerAnim.get(player.id);
+    if (!anim) {
+      anim = {
+        phase: 0,
+        stride: 0,
+        lastX: player.x,
+        lastY: player.y,
+      };
+      this.playerAnim.set(player.id, anim);
     }
 
-    // Character cylinder/torso
-    ctx.beginPath();
-    ctx.arc(iso.x, iso.y - 16, 12, 0, Math.PI * 2);
-    ctx.fillStyle = player.downed ? '#64748b' : color;
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    const pvx = player.vx || 0;
+    const pvy = player.vy || 0;
+    const velSpeed = Math.hypot(pvx, pvy);
+    const dispDist = Math.hypot(player.x - anim.lastX, player.y - anim.lastY);
+    const dispSpeed = dispDist / Math.max(0.001, dt);
+    anim.lastX = player.x;
+    anim.lastY = player.y;
 
-    // Gun barrel pointing along player.angle
-    const barrelEnd = worldToIso(
-      player.x + Math.cos(player.angle) * 0.75,
-      player.y + Math.sin(player.angle) * 0.75,
-      camera
-    );
-    ctx.beginPath();
-    ctx.moveTo(iso.x, iso.y - 16);
-    ctx.lineTo(barrelEnd.x, barrelEnd.y - 16);
-    ctx.strokeStyle = '#e2e8f0';
-    ctx.lineWidth = 3.5;
-    ctx.stroke();
+    const moveSpeed = Math.max(velSpeed, dispSpeed);
+    const isMoving = moveSpeed > 0.08 && !player.downed;
 
-    // Callsign & HP Bar
+    // Smoothly ease stride amplitude between idle (0.0) and running (1.0)
+    const targetStride = isMoving ? Math.min(1.0, moveSpeed / 2.2) : 0.0;
+    anim.stride += (targetStride - anim.stride) * Math.min(1.0, dt * 10);
+
+    if (anim.stride > 0.001) {
+      const isRunning = Boolean(player.running);
+      const walkCadence = isRunning ? 16.5 : (10.5 * Math.max(0.7, Math.min(1.5, moveSpeed / 2.5)));
+      anim.phase = (anim.phase + dt * walkCadence) % (Math.PI * 2);
+    }
+
+    // 3D Isometric Point Projector (world x, y + screen elevation z in px)
+    const project3D = (wx, wy, zPx) => {
+      const p = worldToIso(wx, wy, camera);
+      return { x: p.x, y: p.y - zPx, depth: wx + wy };
+    };
+
+    if (player.downed) {
+      this.drawDownedStickFigure(ctx, player, color, project3D);
+    } else {
+      this.drawHumanoidStickFigure(ctx, player, isLocal, color, anim, mouseWorld, camera, project3D);
+    }
+
+    // Callsign & HP Bar above head
     const hpRatio = Math.max(0, player.hp / player.max_hp);
     ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-    ctx.fillRect(iso.x - 20, iso.y - 40, 40, 5);
+    ctx.fillRect(iso.x - 20, iso.y - 48, 40, 5);
     ctx.fillStyle = player.downed ? '#ef4444' : '#22c55e';
-    ctx.fillRect(iso.x - 20, iso.y - 40, 40 * hpRatio, 5);
+    ctx.fillRect(iso.x - 20, iso.y - 48, 40 * hpRatio, 5);
 
     ctx.font = 'bold 11px Inter, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillStyle = '#f8fafc';
-    ctx.fillText(player.downed ? `${player.name} [DOWNED]` : player.name, iso.x, iso.y - 45);
+    ctx.fillText(player.downed ? `${player.name} [DOWNED]` : player.name, iso.x, iso.y - 53);
 
     ctx.restore();
+  }
+
+  drawHumanoidStickFigure(ctx, player, isLocal, color, anim, mouseWorld, camera, project3D) {
+    const aimAngle = player.angle || 0;
+    const aimCos = Math.cos(aimAngle);
+    const aimSin = Math.sin(aimAngle);
+    // Lateral vector perpendicular to facing angle
+    const latCos = -aimSin;
+    const latSin = aimCos;
+
+    // Movement angle for legs
+    let moveAngle = aimAngle;
+    const pvx = player.vx || 0;
+    const pvy = player.vy || 0;
+    if (Math.hypot(pvx, pvy) > 0.08) {
+      moveAngle = Math.atan2(pvy, pvx);
+    }
+    const walkCos = Math.cos(moveAngle);
+    const walkSin = Math.sin(moveAngle);
+
+    // Spine & Pelvis with walk bob & sprint lean
+    const isRunning = Boolean(player.running);
+    const walkBob = Math.sin(anim.phase * 2) * (isRunning ? 2.0 : 1.2) * anim.stride;
+    const zPelvis = 13 + walkBob;
+    const pPelvis = project3D(player.x, player.y, zPelvis);
+
+    const leanFactor = isRunning ? 0.08 : 0.04;
+    const leanX = walkCos * leanFactor * anim.stride;
+    const leanY = walkSin * leanFactor * anim.stride;
+    const zShoulders = zPelvis + 12;
+    const pShoulders = project3D(player.x + leanX, player.y + leanY, zShoulders);
+
+    // Head
+    const zHead = zShoulders + 7;
+    const pHead = project3D(player.x + leanX + aimCos * 0.04, player.y + leanY + aimSin * 0.04, zHead);
+
+    // Legs calculation
+    const hipDist = 0.12;
+    const strideDist = (isRunning ? 0.35 : 0.25) * anim.stride;
+    const leftSwing = Math.sin(anim.phase);
+    const rightSwing = -leftSwing;
+
+    // Left leg:
+    const lHipWorldX = player.x - latCos * hipDist;
+    const lHipWorldY = player.y - latSin * hipDist;
+    const pLHip = project3D(lHipWorldX, lHipWorldY, zPelvis);
+
+    const lFootSwingWorldX = lHipWorldX + walkCos * (leftSwing * strideDist);
+    const lFootSwingWorldY = lHipWorldY + walkSin * (leftSwing * strideDist);
+    const zLFoot = Math.max(0, leftSwing) * 4.5 * anim.stride;
+    const pLFoot = project3D(lFootSwingWorldX, lFootSwingWorldY, zLFoot);
+
+    const lKneeWorldX = (lHipWorldX + lFootSwingWorldX) * 0.5 + walkCos * 0.04 + aimCos * 0.03;
+    const lKneeWorldY = (lHipWorldY + lFootSwingWorldY) * 0.5 + walkSin * 0.04 + aimSin * 0.03;
+    const zLKnee = (zPelvis + zLFoot) * 0.5 - 1.0;
+    const pLKnee = project3D(lKneeWorldX, lKneeWorldY, zLKnee);
+
+    // Right leg:
+    const rHipWorldX = player.x + latCos * hipDist;
+    const rHipWorldY = player.y + latSin * hipDist;
+    const pRHip = project3D(rHipWorldX, rHipWorldY, zPelvis);
+
+    const rFootSwingWorldX = rHipWorldX + walkCos * (rightSwing * strideDist);
+    const rFootSwingWorldY = rHipWorldY + walkSin * (rightSwing * strideDist);
+    const zRFoot = Math.max(0, rightSwing) * 4.5 * anim.stride;
+    const pRFoot = project3D(rFootSwingWorldX, rFootSwingWorldY, zRFoot);
+
+    const rKneeWorldX = (rHipWorldX + rFootSwingWorldX) * 0.5 + walkCos * 0.04 + aimCos * 0.03;
+    const rKneeWorldY = (rHipWorldY + rFootSwingWorldY) * 0.5 + walkSin * 0.04 + aimSin * 0.03;
+    const zRKnee = (zPelvis + zRFoot) * 0.5 - 1.0;
+    const pRKnee = project3D(rKneeWorldX, rKneeWorldY, zRKnee);
+
+    // Shoulders, Weapon & Hands
+    const shoulderDist = 0.16;
+    const pLShoulder = project3D(player.x + leanX - latCos * shoulderDist, player.y + leanY - latSin * shoulderDist, zShoulders);
+    const pRShoulder = project3D(player.x + leanX + latCos * shoulderDist, player.y + leanY + latSin * shoulderDist, zShoulders);
+
+    const zGun = zPelvis + 5;
+    const pStock = project3D(player.x + aimCos * 0.10 + latCos * 0.05, player.y + aimSin * 0.10 + latSin * 0.05, zGun + 1);
+    const pGrip = project3D(player.x + aimCos * 0.28 + latCos * 0.05, player.y + aimSin * 0.28 + latSin * 0.05, zGun);
+    const pForegrip = project3D(player.x + aimCos * 0.46 - latCos * 0.02, player.y + aimSin * 0.46 - latSin * 0.02, zGun);
+    const pMuzzle = project3D(player.x + aimCos * 0.72, player.y + aimSin * 0.72, zGun);
+
+    const pRElbow = {
+      x: (pRShoulder.x + pGrip.x) * 0.5 + (latCos - latSin) * 2.5,
+      y: (pRShoulder.y + pGrip.y) * 0.5 + 2,
+    };
+    const pLElbow = {
+      x: (pLShoulder.x + pForegrip.x) * 0.5 - (latCos - latSin) * 2.5,
+      y: (pLShoulder.y + pForegrip.y) * 0.5 + 2,
+    };
+
+    // Aim laser line from gun muzzle for local player
+    if (isLocal && mouseWorld) {
+      const mIso = worldToIso(mouseWorld.x, mouseWorld.y, camera);
+      ctx.beginPath();
+      ctx.moveTo(pMuzzle.x, pMuzzle.y);
+      ctx.lineTo(mIso.x, mIso.y);
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    // Depth sorting for legs (draw far leg before near leg)
+    const leftDepth = lHipWorldX + lHipWorldY;
+    const rightDepth = rHipWorldX + rHipWorldY;
+
+    const drawLeg = (pHip, pKnee, pFoot) => {
+      // Dark outline for contrast
+      ctx.beginPath();
+      ctx.moveTo(pHip.x, pHip.y);
+      ctx.lineTo(pKnee.x, pKnee.y);
+      ctx.lineTo(pFoot.x, pFoot.y);
+      ctx.strokeStyle = '#020617';
+      ctx.lineWidth = 4.5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+
+      // Foreground bone
+      ctx.beginPath();
+      ctx.moveTo(pHip.x, pHip.y);
+      ctx.lineTo(pKnee.x, pKnee.y);
+      ctx.lineTo(pFoot.x, pFoot.y);
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      // Foot contact point
+      ctx.beginPath();
+      ctx.arc(pFoot.x, pFoot.y, 2, 0, Math.PI * 2);
+      ctx.fillStyle = '#0f172a';
+      ctx.fill();
+    };
+
+    // 1. Far leg
+    if (leftDepth <= rightDepth) {
+      drawLeg(pLHip, pLKnee, pLFoot);
+    } else {
+      drawLeg(pRHip, pRKnee, pRFoot);
+    }
+
+    // 2. Pelvis & Spine
+    // Pelvis crossbar
+    ctx.beginPath();
+    ctx.moveTo(pLHip.x, pLHip.y);
+    ctx.lineTo(pRHip.x, pRHip.y);
+    ctx.strokeStyle = '#020617';
+    ctx.lineWidth = 4.5;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(pLHip.x, pLHip.y);
+    ctx.lineTo(pRHip.x, pRHip.y);
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    // Spine
+    ctx.beginPath();
+    ctx.moveTo(pPelvis.x, pPelvis.y);
+    ctx.lineTo(pShoulders.x, pShoulders.y);
+    ctx.strokeStyle = '#020617';
+    ctx.lineWidth = 5.0;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(pPelvis.x, pPelvis.y);
+    ctx.lineTo(pShoulders.x, pShoulders.y);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3.0;
+    ctx.stroke();
+
+    // Shoulder crossbar
+    ctx.beginPath();
+    ctx.moveTo(pLShoulder.x, pLShoulder.y);
+    ctx.lineTo(pRShoulder.x, pRShoulder.y);
+    ctx.strokeStyle = '#020617';
+    ctx.lineWidth = 4.5;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(pLShoulder.x, pLShoulder.y);
+    ctx.lineTo(pRShoulder.x, pRShoulder.y);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    // 3. Near leg
+    if (leftDepth > rightDepth) {
+      drawLeg(pLHip, pLKnee, pLFoot);
+    } else {
+      drawLeg(pRHip, pRKnee, pRFoot);
+    }
+
+    // 4. Arms & Gun
+    const drawArm = (pShoulder, pElbow, pHand) => {
+      ctx.beginPath();
+      ctx.moveTo(pShoulder.x, pShoulder.y);
+      ctx.lineTo(pElbow.x, pElbow.y);
+      ctx.lineTo(pHand.x, pHand.y);
+      ctx.strokeStyle = '#020617';
+      ctx.lineWidth = 4.0;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(pShoulder.x, pShoulder.y);
+      ctx.lineTo(pElbow.x, pElbow.y);
+      ctx.lineTo(pHand.x, pHand.y);
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 2.0;
+      ctx.stroke();
+    };
+
+    // Right arm (trigger hand)
+    drawArm(pRShoulder, pRElbow, pGrip);
+
+    // Rifle
+    ctx.beginPath();
+    ctx.moveTo(pStock.x, pStock.y);
+    ctx.lineTo(pMuzzle.x, pMuzzle.y);
+    ctx.strokeStyle = '#020617';
+    ctx.lineWidth = 5.0;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(pStock.x, pStock.y);
+    ctx.lineTo(pMuzzle.x, pMuzzle.y);
+    ctx.strokeStyle = '#475569';
+    ctx.lineWidth = 3.0;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(pGrip.x, pGrip.y);
+    ctx.lineTo(pMuzzle.x, pMuzzle.y);
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Left arm (foregrip support)
+    drawArm(pLShoulder, pLElbow, pForegrip);
+
+    // 5. Head & 3D Visor
+    // Neck
+    ctx.beginPath();
+    ctx.moveTo(pShoulders.x, pShoulders.y);
+    ctx.lineTo(pHead.x, pHead.y);
+    ctx.strokeStyle = '#020617';
+    ctx.lineWidth = 4.0;
+    ctx.stroke();
+
+    // Spherical Helmet / Head
+    ctx.beginPath();
+    ctx.arc(pHead.x, pHead.y, 5.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#0f172a';
+    ctx.fill();
+    ctx.strokeStyle = '#f8fafc';
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+
+    // 3D Directional Visor pointing along aimAngle
+    const visorOffsetScreenX = (aimCos - aimSin) * 2.8;
+    const visorOffsetScreenY = (aimCos + aimSin) * 1.4;
+    ctx.beginPath();
+    ctx.arc(pHead.x + visorOffsetScreenX, pHead.y + visorOffsetScreenY, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  drawDownedStickFigure(ctx, player, color, project3D) {
+    const aimAngle = player.angle || 0;
+    const aimCos = Math.cos(aimAngle);
+    const aimSin = Math.sin(aimAngle);
+    const latCos = -aimSin;
+    const latSin = aimCos;
+
+    // Collapsed on ground
+    const pPelvis = project3D(player.x, player.y, 2);
+    const pShoulders = project3D(player.x - aimCos * 0.28, player.y - aimSin * 0.28, 3);
+    const pHead = project3D(player.x - aimCos * 0.44, player.y - aimSin * 0.44, 3);
+
+    const pLHip = project3D(player.x - latCos * 0.12, player.y - latSin * 0.12, 2);
+    const pRHip = project3D(player.x + latCos * 0.12, player.y + latSin * 0.12, 2);
+
+    const pLFoot = project3D(player.x + aimCos * 0.25 - latCos * 0.20, player.y + aimSin * 0.25 - latSin * 0.20, 1);
+    const pRFoot = project3D(player.x + aimCos * 0.28 + latCos * 0.20, player.y + aimSin * 0.28 + latSin * 0.20, 1);
+
+    const drawDownedBone = (p1, p2) => {
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.strokeStyle = '#020617';
+      ctx.lineWidth = 4.0;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.strokeStyle = '#64748b';
+      ctx.lineWidth = 2.0;
+      ctx.stroke();
+    };
+
+    // Legs
+    drawDownedBone(pLHip, pLFoot);
+    drawDownedBone(pRHip, pRFoot);
+    drawDownedBone(pLHip, pRHip);
+
+    // Spine
+    drawDownedBone(pPelvis, pShoulders);
+    drawDownedBone(pShoulders, pHead);
+
+    // Head
+    ctx.beginPath();
+    ctx.arc(pHead.x, pHead.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#334155';
+    ctx.fill();
+    ctx.strokeStyle = '#ef4444';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
   }
 
   drawProjectiles(ctx, projectiles, camera) {

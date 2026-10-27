@@ -1,3 +1,4 @@
+import { audioManager } from './audio.js';
 /**
  * Main client controller: WebSocket networking, Lobby & Leader Mission selector,
  * HUD, Interactive Puzzle Modals, and real-time WASD + Mouse Aim/Fire input loop.
@@ -27,10 +28,34 @@ const keys = {
   down: false,
   left: false,
   right: false,
+  shift: false,
 };
+
+function isLocalPlayerLightWeapon(p) {
+  if (!p || !p.inventory) return true;
+  const slot = p.inventory.active_weapon_slot || 'primary_weapon';
+  if (slot === 'secondary_weapon') return true;
+  const item = p.inventory.equipped?.[slot];
+  if (!item) return false;
+  const name = (item.name || '').toLowerCase();
+  const tid = (item.template_id || '').toLowerCase();
+  return name.includes('pistol') || name.includes('revolver') || tid.includes('pistol') || tid.includes('revolver') || (item.weight && item.weight <= 3);
+}
 
 const mouseScreen = { x: window.innerWidth * 0.5, y: window.innerHeight * 0.5 };
 let mouseWorld = { x: 8, y: 8 };
+
+// Expose state and debug helpers on window for tests and console
+if (typeof window !== 'undefined') {
+  window.__game = {
+    get state() { return state; },
+    get activeChest() { return activeChest; },
+    get localPlayerId() { return localPlayerId; },
+    keys,
+    mouseScreen,
+    send: (payload) => send(payload),
+  };
+}
 let firing = false;
 
 const camera = {
@@ -148,6 +173,19 @@ function connectWebSocket() {
     } else if (msg.type === 'state') {
       const prevPhase = state ? state.phase : null;
       state = msg;
+
+      // Handle server-synchronized Web Audio events
+      const me = getLocalPlayer();
+      if (me && msg.audio_events && msg.audio_events.length > 0) {
+        for (const evt of msg.audio_events) {
+          audioManager.playSpatialSound(evt, { x: me.x, y: me.y });
+        }
+      }
+
+      // Handle server-synchronized dynamic music
+      if (msg.music) {
+        audioManager.updateMusic(msg.music);
+      }
       if (state.phase === 'lobby' || state.phase === 'prep') {
         gameScreen.classList.add('hidden');
         puzzleModal.classList.add('hidden');
@@ -725,7 +763,7 @@ function updateHUD() {
     hudAmmoText.textContent =
       me.reload_timer > 0
         ? `RELOADING (${me.reload_timer.toFixed(1)}s)`
-        : `${me.ammo} / ${me.max_ammo}`;
+        : `${me.ammo} / ${me.max_ammo}${me.running ? (isLocalPlayerLightWeapon(me) ? ' [SPRINTING]' : ' [SPRINT: LIGHT WEAPONS ONLY]') : ''}`;
 
     if (cls) {
       hudSkillName.textContent = `[SPACE] ${cls.skill.name}`;
@@ -940,11 +978,52 @@ if (hudInventorySidebar) {
   });
 }
 
-function renderChestModal() {
+let lastRenderedChestItemsKey = null;
+let chestDelegated = false;
+
+function initChestBodyEvents() {
+  if (chestDelegated || !chestBody) return;
+  chestDelegated = true;
+
+  chestBody.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.chest-take-btn');
+    if (btn && activeChest) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const itemId = btn.dataset.itemId;
+      if (itemId) {
+        send({ type: 'take_crate_item', crate_id: activeChest.id, item_id: itemId });
+      }
+    }
+  });
+
+  chestBody.addEventListener('dragstart', (ev) => {
+    if (ev.target.closest('.chest-take-btn')) {
+      ev.preventDefault();
+      return;
+    }
+    const card = ev.target.closest('.chest-item-card');
+    if (card && activeChest && card.dataset.itemId) {
+      ev.dataTransfer.setData(
+        'text/plain',
+        JSON.stringify({ source: 'crate', crate_id: activeChest.id, item_id: card.dataset.itemId })
+      );
+    }
+  });
+}
+
+function renderChestModal(force = false) {
   if (!activeChest || !chestModal) return;
+  initChestBodyEvents();
   chestModal.classList.remove('hidden');
   chestTitle.textContent = activeChest.name || activeChest.label || 'SUPPLY CRATE';
   const items = activeChest.items || [];
+  const itemsKey = `${activeChest.id}_${items.map((it) => it.id).join(',')}`;
+  if (!force && lastRenderedChestItemsKey === itemsKey) {
+    return;
+  }
+  lastRenderedChestItemsKey = itemsKey;
+
   if (items.length === 0) {
     chestBody.innerHTML =
       '<div style="color:#64748b;font-size:0.85rem;padding:12px 0;">This chest is empty.</div>';
@@ -959,26 +1038,11 @@ function renderChestModal() {
           <span style="color:#38bdf8;font-weight:700;">(${it.weight || 1} WT)</span><br/>
           <span style="color:#94a3b8;font-size:0.73rem;">${it.description || it.slot || 'Equipment'}</span>
         </div>
-        <button class="mini-btn chest-take-btn" data-item-id="${it.id}">→ Move to Storage</button>
+        <button type="button" class="mini-btn chest-take-btn" data-item-id="${it.id}" draggable="false" style="position:relative;z-index:2;cursor:pointer;">→ Move to Storage</button>
       </div>
     `
     )
     .join('');
-
-  chestBody.querySelectorAll('.chest-item-card').forEach((el) => {
-    el.addEventListener('dragstart', (ev) => {
-      ev.dataTransfer.setData(
-        'text/plain',
-        JSON.stringify({ source: 'crate', crate_id: activeChest.id, item_id: el.dataset.itemId })
-      );
-    });
-  });
-
-  chestBody.querySelectorAll('.chest-take-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      send({ type: 'take_crate_item', crate_id: activeChest.id, item_id: btn.dataset.itemId });
-    });
-  });
 }
 
 function renderPuzzleModal() {
@@ -1084,6 +1148,7 @@ if (closeChestBtn) {
   closeChestBtn.addEventListener('click', () => {
     chestModal.classList.add('hidden');
     activeChest = null;
+    lastRenderedChestItemsKey = null;
   });
 }
 
@@ -1104,6 +1169,7 @@ window.addEventListener('keydown', (e) => {
   if (code === 'KeyS' || code === 'ArrowDown') keys.down = true;
   if (code === 'KeyA' || code === 'ArrowLeft') keys.left = true;
   if (code === 'KeyD' || code === 'ArrowRight') keys.right = true;
+  if (code === 'ShiftLeft' || code === 'ShiftRight' || e.key === 'Shift') keys.shift = true;
 
   if (code === 'KeyR') send({ type: 'reload' });
   if (code === 'Digit1') send({ type: 'inventory_action', action: 'switch_weapon', slot: 'primary_weapon' });
@@ -1121,6 +1187,7 @@ window.addEventListener('keydown', (e) => {
     } else if (activeChest) {
       chestModal.classList.add('hidden');
       activeChest = null;
+      lastRenderedChestItemsKey = null;
     } else {
       send({ type: 'interact' });
     }
@@ -1133,6 +1200,7 @@ window.addEventListener('keydown', (e) => {
     if (activeChest) {
       chestModal.classList.add('hidden');
       activeChest = null;
+      lastRenderedChestItemsKey = null;
     }
   }
 });
@@ -1143,6 +1211,7 @@ window.addEventListener('keyup', (e) => {
   if (code === 'KeyS' || code === 'ArrowDown') keys.down = false;
   if (code === 'KeyA' || code === 'ArrowLeft') keys.left = false;
   if (code === 'KeyD' || code === 'ArrowRight') keys.right = false;
+  if (code === 'ShiftLeft' || code === 'ShiftRight' || e.key === 'Shift') keys.shift = false;
 });
 
 canvas.addEventListener('mousemove', (e) => {
@@ -1192,13 +1261,19 @@ setInterval(() => {
     ? { dx: 0, dy: 0 }
     : screenInputToWorldDelta(keys.up, keys.down, keys.left, keys.right);
 
+  const me = getLocalPlayer();
+  const isLight = isLocalPlayerLightWeapon(me);
+  // When running with heavy weapons, weapon firing is blocked
+  const canShoot = !keys.shift || isLight;
+
   send({
     type: 'input',
     dx: move.dx,
     dy: move.dy,
     aim_x: mouseWorld.x,
     aim_y: mouseWorld.y,
-    firing: firing && !activePuzzle && !activeChest,
+    firing: firing && canShoot && !activePuzzle && !activeChest,
+    running: Boolean(keys.shift),
   });
 }, 1000 / 30);
 
@@ -1216,5 +1291,12 @@ function animate() {
   requestAnimationFrame(animate);
 }
 
+// Pre-warm audio manager on first user action or start
+const unlockAudio = () => {
+  audioManager.init().catch(console.error);
+};
+window.addEventListener('click', unlockAudio);
+window.addEventListener('keydown', unlockAudio);
+window.addEventListener('pointerdown', unlockAudio);
 connectWebSocket();
 requestAnimationFrame(animate);

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+import heapq
 import math
 import random
 
@@ -13,6 +14,63 @@ from backend.app.engine.physics import circle_vs_aabb, point_in_rect
 from backend.app.engine.wfc import DIRS, run_wfc
 
 WALL_THICKNESS = 0.8
+
+# Distinct high-contrast colors matching doors to their unlocking security consoles
+DOOR_PALETTE = [
+    {"name": "Amber", "color": "#f59e0b", "glow": "#fbbf24"},
+    {"name": "Cyan", "color": "#06b6d4", "glow": "#22d3ee"},
+    {"name": "Magenta", "color": "#ec4899", "glow": "#f472b6"},
+    {"name": "Emerald", "color": "#10b981", "glow": "#34d399"},
+    {"name": "Violet", "color": "#8b5cf6", "glow": "#a78bfa"},
+    {"name": "Coral", "color": "#f97316", "glow": "#fb923c"},
+    {"name": "Lime", "color": "#84cc16", "glow": "#a3e635"},
+]
+
+
+def astar_wire_path(start: tuple[float, float], goal: tuple[float, float], segments: list[dict], walls: list[dict], ignore_wall_ids: set[str]) -> list[tuple[float, float]]:
+    res = 0.5
+    sx, sy = round(start[0] / res) * res, round(start[1] / res) * res
+    gx, gy = round(goal[0] / res) * res, round(goal[1] / res) * res
+
+    def is_blocked(x: float, y: float) -> bool:
+        if not any(point_in_rect(x, y, s) for s in segments):
+            return True
+        for w in walls:
+            if not w.get("active", True) or w.get("id") in ignore_wall_ids:
+                continue
+            if circle_vs_aabb(x, y, 0.22, w)[2]:
+                return True
+        return False
+
+    open_set = []
+    heapq.heappush(open_set, (0.0, 0.0, (sx, sy)))
+    came_from = {}
+    g_score = {(sx, sy): 0.0}
+
+    while open_set:
+        _, current_g, current = heapq.heappop(open_set)
+        if math.hypot(current[0] - gx, current[1] - gy) <= res:
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            path.reverse()
+            path.append((gx, gy))
+            return path
+
+        for dx, dy in [(res, 0), (-res, 0), (0, res), (0, -res), (res, res), (-res, res), (res, -res), (-res, -res)]:
+            nx, ny = round((current[0] + dx) / res) * res, round((current[1] + dy) / res) * res
+            if is_blocked(nx, ny):
+                continue
+            step_cost = math.hypot(dx, dy)
+            tentative_g = current_g + step_cost
+            if tentative_g < g_score.get((nx, ny), float("inf")):
+                came_from[(nx, ny)] = current
+                g_score[(nx, ny)] = tentative_g
+                h = math.hypot(nx - gx, ny - gy)
+                heapq.heappush(open_set, (tentative_g + h, tentative_g, (nx, ny)))
+
+    return [(sx, sy), (gx, gy)]
 
 
 def generate_puzzle_data(puzzle_type: str, seed_idx: int = 0) -> dict:
@@ -107,14 +165,16 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
             door_center = (bx, y + 8.0)
             for t in (0.0, CONNECTOR_OFFSET + CONNECTOR_WIDTH):
                 walls.append({"id": f"flank_{c_idx}_{int(t)}", "x": wall_x, "y": y + t, "w": WALL_THICKNESS, "h": CONNECTOR_OFFSET, "active": True, "blocks_sight": True, "type": "wall"})
-            walls.append({"id": door_id, "x": bx - 0.4, "y": y + CONNECTOR_OFFSET, "w": 0.8, "h": CONNECTOR_WIDTH, "active": True, "blocks_sight": True, "type": "door"})
+            door_color_info = DOOR_PALETTE[c_idx % len(DOOR_PALETTE)]
+            walls.append({"id": door_id, "x": bx - 0.4, "y": y + CONNECTOR_OFFSET, "w": 0.8, "h": CONNECTOR_WIDTH, "active": True, "blocks_sight": True, "type": "door", "color": door_color_info["color"], "color_name": door_color_info["name"]})
         else:
             by = y + CELL_SIZE if d == "S" else y
             wall_y = by - WALL_THICKNESS * 0.5
             door_center = (x + 8.0, by)
             for t in (0.0, CONNECTOR_OFFSET + CONNECTOR_WIDTH):
                 walls.append({"id": f"flank_{c_idx}_{int(t)}", "x": x + t, "y": wall_y, "w": CONNECTOR_OFFSET, "h": WALL_THICKNESS, "active": True, "blocks_sight": True, "type": "wall"})
-            walls.append({"id": door_id, "x": x + CONNECTOR_OFFSET, "y": by - 0.4, "w": CONNECTOR_WIDTH, "h": 0.8, "active": True, "blocks_sight": True, "type": "door"})
+            door_color_info = DOOR_PALETTE[c_idx % len(DOOR_PALETTE)]
+            walls.append({"id": door_id, "x": x + CONNECTOR_OFFSET, "y": by - 0.4, "w": CONNECTOR_WIDTH, "h": 0.8, "active": True, "blocks_sight": True, "type": "door", "color": door_color_info["color"], "color_name": door_color_info["name"]})
 
         from_seg = segments[c["from_seg"]]
         to_seg = segments[c["to_seg"]]
@@ -144,6 +204,8 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
             "radius": 2.8,
             "solved": False,
             "door_id": door_id,
+            "color": door_color_info["color"],
+            "color_name": door_color_info["name"],
             "segment_index": from_seg["index"],
             "target_segment_index": to_seg["index"],
             "data": generate_puzzle_data(ptype, c_idx + wfc["seed"]),
@@ -160,6 +222,27 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
             "x": door_center[0],
             "y": door_center[1],
         })
+
+
+    # Compute trailing floor wires from puzzle console to the side of the door using A*
+    wires = []
+    for pz in puzzles:
+        d_id = pz.get("door_id")
+        door_wall = next((w for w in walls if w.get("id") == d_id), None)
+        if door_wall:
+            ignore_ids = {door_wall["id"]}
+            # Determine attachment point at the side/jamb of the door frame
+            if door_wall["w"] > door_wall["h"]:
+                door_side = (door_wall["x"] + 0.35, door_wall["y"] + door_wall["h"] * 0.5)
+            else:
+                door_side = (door_wall["x"] + door_wall["w"] * 0.5, door_wall["y"] + 0.35)
+            path = astar_wire_path((pz["x"], pz["y"]), door_side, segments, walls, ignore_ids)
+            wires.append({
+                "puzzle_id": pz["id"],
+                "door_id": d_id,
+                "color": pz.get("color", "#f59e0b"),
+                "path": path,
+            })
 
     # Interior walls, enemies, loot, and skill-check supply crates per segment
     enemy_counter = 1
@@ -220,18 +303,25 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
             })
             enemy_counter += 1
 
-        for lt_idx, lt in enumerate(tpl.get("loot_spawns", [])):
-            ltype = lt["type"] if lt["type"] != "credits" or lt_idx == 0 else ground_variety[(idx + lt_idx) % len(ground_variety)]
-            item_obj = make_item(ltype, f"loot_{loot_counter}")
-            item_obj.update({
-                "x": seg["x"] + float(lt["x"]),
-                "y": seg["y"] + float(lt["y"]),
-                "radius": 2.0,
-                "collected": False,
-                "segment_index": idx,
-            })
-            loot.append(item_obj)
-            loot_counter += 1
+        # Spawn a sparse subset of loot (reducing density: only 1 or at most 2 items per segment)
+        available_loot = tpl.get("loot_spawns", [])
+        if available_loot:
+            # Pick 1 item per segment, occasionally 2 in larger hubs
+            loot_count_in_seg = 2 if seg["id"] in ("command_hub", "bio_chamber") else 1
+            for lt_idx in range(min(loot_count_in_seg, len(available_loot))):
+                chosen_idx = (idx + lt_idx) % len(available_loot)
+                lt = available_loot[chosen_idx]
+                ltype = lt["type"] if lt["type"] != "credits" or lt_idx == 0 else ground_variety[(idx + lt_idx) % len(ground_variety)]
+                item_obj = make_item(ltype, f"loot_{loot_counter}")
+                item_obj.update({
+                    "x": seg["x"] + float(lt["x"]),
+                    "y": seg["y"] + float(lt["y"]),
+                    "radius": 2.0,
+                    "collected": False,
+                    "segment_index": idx,
+                })
+                loot.append(item_obj)
+                loot_counter += 1
 
         # Add an interactive supply crate (locked with a skill-check puzzle) in segments
         if seg["id"] != "extraction_pad":
@@ -271,6 +361,7 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
         "connectors": connectors_out,
         "walls": walls,
         "puzzles": puzzles,
+        "wires": wires,
         "enemies": enemies,
         "loot": loot,
         "crates": crates,
