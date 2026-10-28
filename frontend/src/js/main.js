@@ -4,42 +4,46 @@ import { audioManager } from './audio.js';
  * HUD, Interactive Puzzle Modals, and real-time WASD + Mouse Aim/Fire input loop.
  */
 
-import { isoToWorld, screenInputToWorldDelta } from './iso.js';
+import { isoToWorld } from './iso.js';
 import { IsometricRenderer } from './renderer.js';
+import { html, joinHtml, safeColor, canvasPoint } from './ui.js';
+import { canFireWhileRunning } from './content.js';
+import { ClientSession } from './network.js';
+import { InputContext } from './input.js';
+import { InteractionModal } from './modal.js';
+import { renderPuzzle, refreshPuzzleTime } from './puzzles.js';
+import { renderService } from './hub.js';
 
-const DEFAULT_CLASSES = {
-  vanguard: { id: 'vanguard', name: 'Vanguard', title: 'Heavy Assault & Pointman', color: '#f87171', max_hp: 120, speed: 4.8, sight_range: 11.0, weapon: { name: 'Heavy Breacher Shotgun', damage: 14, fire_rate: 1.2, mag_size: 6, pellets: 5 }, skill: { name: 'Shockwave Shield', cooldown: 18.0, description: 'Deploys a kinetic blast pushing back enemies and blocking incoming projectiles.' }, passive: { name: 'Heavy Plating', description: 'Carries up to 24 WT and absorbs 20% reduced kinetic damage.' } },
-  tech: { id: 'tech', name: 'Tech Specialist', title: 'Combat Engineer & Hacker', color: '#38bdf8', max_hp: 90, speed: 5.2, sight_range: 13.0, weapon: { name: 'Silenced Tactical SMG', damage: 8, fire_rate: 4.0, mag_size: 30, pellets: 1 }, skill: { name: 'Deployable Sentry', cooldown: 22.0, description: 'Deploys an autonomous turret that tracks and suppresses alien targets.' }, passive: { name: 'Hardware Bypass', description: 'Instantly solves security terminals without manual node alignment.' } },
-  medic: { id: 'medic', name: 'Field Medic', title: 'Support & Bioregen Operator', color: '#4ade80', max_hp: 100, speed: 5.0, sight_range: 12.0, weapon: { name: 'Burst Bio-Carbine', damage: 10, fire_rate: 3.0, mag_size: 20, pellets: 1 }, skill: { name: 'Nanite Healing Field', cooldown: 20.0, description: 'Deploys a lingering regenerative nanite cloud restoring operative HP.' }, passive: { name: 'Combat Stimulants', description: 'Revives downed teammates 50% faster with bonus initial HP.' } },
-  recon: { id: 'recon', name: 'Recon Scout', title: 'Long-Range Infiltrator', color: '#c084fc', max_hp: 85, speed: 5.6, sight_range: 16.0, weapon: { name: 'Suppressed Marksman Rifle', damage: 18, fire_rate: 1.5, mag_size: 10, pellets: 1 }, skill: { name: 'Tactical Sonar Pulse', cooldown: 16.0, description: 'Pings the sector revealing all enemy locations through walls.' }, passive: { name: 'Silent Footsteps', description: 'Movement generates 60% less sound radius on enemy hearing radar.' } },
-};
-
-let ws = null;
 let localPlayerId = null;
-let classesConfig = Object.assign({}, DEFAULT_CLASSES);
+let classesConfig = {};
+let itemsConfig = {};
+let contentCatalog = null;
 let missionsConfig = {};
 let state = null;
 let activePuzzle = null;
 let activeChest = null;
 let lastHudInvSig = '';
+let lastServiceSig = '';
 
-const keys = {
-  up: false,
-  down: false,
-  left: false,
-  right: false,
-  shift: false,
-};
+const input = new InputContext(send, () => Boolean(state?.map && getLocalPlayer()?.capabilities?.can_move &&
+  !modals.active && !modals.pending && classModal.classList.contains('hidden') && !getLocalPlayer()?.downed),
+  () => mouseWorld, () => (modals.active || modals.pending) ? modals.close() : false,
+  () => modals.request({ type: 'interact' }));
+const keys = input.keys;
+const modals = new InteractionModal(send, active => {
+  input.reset();
+  activePuzzle = active?.kind === 'puzzle' ? active.data : null;
+  activeChest = active?.kind === 'chest' ? active.data : null;
+  puzzleModal.classList.toggle('hidden', !activePuzzle);
+  chestModal.classList.toggle('hidden', !activeChest);
+  document.getElementById('service-modal').classList.toggle('hidden', active?.kind !== 'service');
+  if (activePuzzle) renderPuzzleModal();
+  if (activeChest) renderChestModal();
+  if (active?.kind === 'service') renderServiceModal();
+});
 
 function isLocalPlayerLightWeapon(p) {
-  if (!p || !p.inventory) return true;
-  const slot = p.inventory.active_weapon_slot || 'primary_weapon';
-  if (slot === 'secondary_weapon') return true;
-  const item = p.inventory.equipped?.[slot];
-  if (!item) return false;
-  const name = (item.name || '').toLowerCase();
-  const tid = (item.template_id || '').toLowerCase();
-  return name.includes('pistol') || name.includes('revolver') || tid.includes('pistol') || tid.includes('revolver') || (item.weight && item.weight <= 3);
+  return canFireWhileRunning(p, itemsConfig);
 }
 
 const mouseScreen = { x: window.innerWidth * 0.5, y: window.innerHeight * 0.5 };
@@ -50,13 +54,16 @@ if (typeof window !== 'undefined') {
   window.__game = {
     get state() { return state; },
     get activeChest() { return activeChest; },
+    get activePuzzle() { return activePuzzle; },
+    get camera() { return camera; },
+    get firing() { return input.firing; },
     get localPlayerId() { return localPlayerId; },
+    get catalog() { return contentCatalog; },
     keys,
     mouseScreen,
     send: (payload) => send(payload),
   };
 }
-let firing = false;
 
 const camera = {
   x: 6.0,
@@ -127,18 +134,20 @@ const puzzleBody = document.getElementById('puzzle-body');
 const closePuzzleBtn = document.getElementById('close-puzzle-btn');
 
 function resizeCanvas() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-  camera.screenW = canvas.width;
-  camera.screenH = canvas.height;
+  camera.screenW = window.innerWidth;
+  camera.screenH = window.innerHeight;
+  camera.pixelRatio = window.devicePixelRatio || 1;
+  canvas.width = Math.round(camera.screenW * camera.pixelRatio);
+  canvas.height = Math.round(camera.screenH * camera.pixelRatio);
 }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
 function send(payload) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(payload));
-  }
+  if (state?.map && (modals.active || modals.pending) && ['reload', 'skill', 'inventory_action'].includes(payload.type)) return false;
+  if (state?.map && !state.world_capabilities?.combat && ['reload', 'skill'].includes(payload.type)) return false;
+  if (payload.type === 'input' && payload.firing && state?.map && !state.world_capabilities?.combat) payload = { ...payload, firing: false };
+  return session.send(payload);
 }
 
 function getLocalPlayer() {
@@ -146,139 +155,128 @@ function getLocalPlayer() {
   return state.players.find((p) => p.id === localPlayerId) || null;
 }
 
-function connectWebSocket() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/ws`);
-
-  ws.addEventListener('message', (event) => {
-    const msg = JSON.parse(event.data);
+const session = new ClientSession(msg => {
     if (msg.type === 'welcome') {
       localPlayerId = msg.player_id;
-      classesConfig = msg.classes || {};
-      missionsConfig = msg.missions || {};
+      contentCatalog = msg.catalog;
+      classesConfig = contentCatalog.classes;
+      itemsConfig = contentCatalog.items;
+      missionsConfig = contentCatalog.missions;
       renderer.setClassesConfig(classesConfig);
+      renderer.setItemsConfig(itemsConfig);
+      renderer.setPresentation(contentCatalog.presentation);
+      audioManager.setCatalog(contentCatalog);
       state = msg.state;
+      modals.reconcile(state, localPlayerId);
       const me = getLocalPlayer();
+      audioManager.consumeSnapshot(state, me ? { x: me.x, y: me.y } : null);
       if (me && callsignInput) {
         callsignInput.value = me.name;
       }
-      if (state.phase === 'prep') {
-        lobbyScreen.classList.add('hidden');
-        prepScreen.classList.remove('hidden');
-        renderPrepUI();
-      } else {
-        renderLobbyUI();
-      }
+      updateScreens(true);
       maybeShowClassModal();
+    } else if (msg.type === 'command_error' || msg.type === 'inventory_feedback') {
+      const current = !msg.request_id || modals.receive(msg);
+      if (current && (msg.ok === false || msg.type === 'command_error')) {
+        console.warn(msg.message || msg.reason || 'Command rejected');
+        showFeedback(msg.message || msg.reason || 'Command rejected');
+      }
     } else if (msg.type === 'state') {
-      const prevPhase = state ? state.phase : null;
+      const previousWorld = state?.world_id;
       state = msg;
+      modals.reconcile(state, localPlayerId);
 
-      // Handle server-synchronized Web Audio events
+      if (activePuzzle) refreshPuzzleTime(puzzleBody, activePuzzle, state.simulation_time);
+
+      // The audio consumer owns world reset, event dedup and asset/gesture readiness.
       const me = getLocalPlayer();
-      if (me && msg.audio_events && msg.audio_events.length > 0) {
-        for (const evt of msg.audio_events) {
-          audioManager.playSpatialSound(evt, { x: me.x, y: me.y });
-        }
-      }
+      audioManager.consumeSnapshot(msg, me ? { x: me.x, y: me.y } : null);
+      updateScreens(previousWorld !== state.world_id);
+    } else if (['interact_result', 'chest_update', 'puzzle_update', 'service_feedback'].includes(msg.type)) {
+      if (modals.receive(msg) && msg.ok === false) showFeedback(msg.message || msg.reason || 'Target unavailable');
+    }
+  }, () => {
+    modals.close();
+    input.reset();
+    state = null;
+    localPlayerId = null;
+    renderer.resetExplored();
+    renderer.scene = [];
+    audioManager.resetWorld();
+  });
 
-      // Handle server-synchronized dynamic music
-      if (msg.music) {
-        audioManager.updateMusic(msg.music);
-      }
-      if (state.phase === 'lobby' || state.phase === 'prep') {
-        gameScreen.classList.add('hidden');
-        puzzleModal.classList.add('hidden');
-        if (chestModal) chestModal.classList.add('hidden');
-        activePuzzle = null;
-        activeChest = null;
-        if (state.phase === 'lobby') {
-          lobbyScreen.classList.remove('hidden');
-          prepScreen.classList.add('hidden');
-          renderLobbyUI();
-        } else {
-          lobbyScreen.classList.add('hidden');
-          prepScreen.classList.remove('hidden');
-          renderPrepUI();
-        }
-        maybeShowClassModal();
-      } else {
-        lobbyScreen.classList.add('hidden');
-        prepScreen.classList.add('hidden');
-        classModal.classList.add('hidden');
-        gameScreen.classList.remove('hidden');
-        if (prevPhase === 'lobby' || prevPhase === 'prep') {
-          lastHudInvSig = '';
-          if (callsignInput) callsignInput.blur();
-          renderer.resetExplored();
-          const me = getLocalPlayer();
-          if (me) {
-            camera.x = me.x;
-            camera.y = me.y;
-          }
-        }
-        if (activeChest && state.map && state.map.crates) {
-          const updatedCrate = state.map.crates.find((c) => c.id === activeChest.id);
-          if (updatedCrate) {
-            activeChest = updatedCrate;
-            renderChestModal();
-          }
-        }
-        updateHUD();
-      }
-    } else if (msg.type === 'interact_result' || msg.type === 'open_puzzle') {
-      if (msg.puzzle) {
-        activePuzzle = msg.puzzle;
-        keys.up = keys.down = keys.left = keys.right = false;
-        firing = false;
-        renderPuzzleModal();
-      } else if ((msg.action === 'open_chest' || msg.interact_type === 'open_chest') && msg.crate) {
-        activeChest = msg.crate;
-        keys.up = keys.down = keys.left = keys.right = false;
-        firing = false;
-        renderChestModal();
-      }
-    } else if (msg.type === 'chest_update') {
-      if (msg.crate) {
-        activeChest = msg.crate;
-        renderChestModal();
-      }
-    } else if (msg.type === 'puzzle_update') {
-      if (msg.puzzle) {
-        activePuzzle = msg.puzzle;
-      }
-      if (msg.solved) {
-        puzzleModal.classList.add('hidden');
-        activePuzzle = null;
-        if (msg.unlocked_crate) {
-          activeChest = msg.unlocked_crate;
-          renderChestModal();
-        }
-      } else if (activePuzzle) {
-        renderPuzzleModal();
+function updateScreens(worldChanged) {
+  if (!state.map) {
+    gameScreen.classList.add('hidden');
+    puzzleModal.classList.add('hidden');
+    if (chestModal) chestModal.classList.add('hidden');
+    activePuzzle = null;
+    activeChest = null;
+    if (state.phase === 'lobby') {
+      lobbyScreen.classList.remove('hidden');
+      prepScreen.classList.add('hidden');
+      renderLobbyUI();
+    } else {
+      lobbyScreen.classList.add('hidden');
+      prepScreen.classList.remove('hidden');
+      renderPrepUI();
+    }
+    maybeShowClassModal();
+  } else {
+    lobbyScreen.classList.add('hidden');
+    prepScreen.classList.add('hidden');
+    if (!['lobby', 'prep'].includes(state.phase)) classModal.classList.add('hidden');
+    gameScreen.classList.remove('hidden');
+    if (worldChanged) {
+      input.reset();
+      lastHudInvSig = '';
+      if (callsignInput) callsignInput.blur();
+      renderer.resetExplored();
+      renderer.scene = [];
+      const me = getLocalPlayer();
+      if (me) {
+        camera.x = me.x;
+        camera.y = me.y;
       }
     }
-  });
+    updateHUD();
+    maybeShowClassModal();
+    if (modals.active?.kind === 'service') renderServiceModal();
+  }
+}
 
-  ws.addEventListener('close', () => {
-    setTimeout(connectWebSocket, 1500);
-  });
+function renderServiceModal() {
+  const active = modals.active;
+  if (active?.kind !== 'service' || !state) return;
+  const signature = JSON.stringify([active, state.phase, state.selected_level_id, state.shared_stash, state.players.map(p => [p.id, p.name, p.ready, p.inventory]), state.levels, modals.busy]);
+  if (signature === lastServiceSig) return;
+  lastServiceSig = signature;
+  document.getElementById('service-title').textContent = active.data.label;
+  renderService(document.getElementById('service-body'), active.data, state, localPlayerId,
+    payload => modals.request(payload, active.targetId), send, modals.busy);
+}
+
+function showFeedback(message) {
+  const notice = document.getElementById('command-feedback');
+  notice.textContent = message;
+  notice.classList.remove('hidden');
 }
 
 let lastLobbySig = '';
 let localLockNotice = '';
 
 function getClassPortraitSvg(classId, color) {
+  color = safeColor(color);
   const visorColor = '#38bdf8';
   const crest =
     classId === 'vanguard'
-      ? '<rect x="18" y="8" width="28" height="8" rx="3" fill="' + color + '"/>'
+      ? html`<rect x="18" y="8" width="28" height="8" rx="3" fill="${color}"/>`
       : classId === 'tech'
-      ? '<circle cx="48" cy="18" r="5" fill="#fde047"/><line x1="48" y1="6" x2="48" y2="14" stroke="#fde047" stroke-width="2"/>'
+      ? html`<circle cx="48" cy="18" r="5" fill="#fde047"/><line x1="48" y1="6" x2="48" y2="14" stroke="#fde047" stroke-width="2"/>`
       : classId === 'medic'
-      ? '<path d="M29 9 H35 V13 H39 V19 H35 V23 H29 V19 H25 V13 H29 Z" fill="#22c55e"/>'
-      : '<polygon points="32,6 42,16 22,16" fill="' + color + '"/>';
-  return `
+      ? html`<path d="M29 9 H35 V13 H39 V19 H35 V23 H29 V19 H25 V13 H29 Z" fill="#22c55e"/>`
+      : html`<polygon points="32,6 42,16 22,16" fill="${color}"/>`;
+  return html`
     <svg width="62" height="62" viewBox="0 0 64 64" style="flex-shrink:0;background:#090e1a;border:2px solid ${color};border-radius:8px;padding:3px;">
       <path d="M12 58 C12 42, 52 42, 52 58 Z" fill="${color}" opacity="0.85"/>
       <rect x="18" y="16" width="28" height="26" rx="9" fill="#1e293b" stroke="${color}" stroke-width="2.5"/>
@@ -288,7 +286,6 @@ function getClassPortraitSvg(classId, color) {
   `;
 }
 
-const CLASS_CAPACITIES = { vanguard: 24, tech: 18, medic: 15, recon: 12 };
 const SLOT_DEFS = [
   { key: 'primary_weapon', label: 'Primary' },
   { key: 'secondary_weapon', label: 'Secondary' },
@@ -312,22 +309,26 @@ function maybeShowClassModal() {
 }
 
 function renderClassModal() {
+  if (!state || !['lobby', 'prep'].includes(state.phase)) return;
+  input.reset();
   const me = getLocalPlayer();
   closeClassBtn.style.display = me && me.class_chosen ? '' : 'none';
   classGridEl.innerHTML = '';
-  const configs = Object.keys(classesConfig).length > 0 ? classesConfig : DEFAULT_CLASSES;
-  for (const cls of Object.values(configs)) {
+  if (!Object.keys(classesConfig).length) {
+    classGridEl.textContent = 'Content catalog unavailable. Waiting for server.';
+  }
+  for (const cls of Object.values(classesConfig)) {
     const selected = me && me.class_chosen && me.class_id === cls.id;
-    const cap = CLASS_CAPACITIES[cls.id] || 15;
+    const cap = cls.carry_capacity;
     const card = document.createElement('div');
     card.className = `card class-card ${selected ? 'selected' : ''}`;
-    card.style.borderColor = selected ? cls.color : '';
+    card.style.borderColor = selected ? safeColor(cls.color) : '';
     card.style.cursor = 'pointer';
-    card.innerHTML = `
+    card.innerHTML = html`
       <div style="display:flex;gap:10px;align-items:center;">
         ${getClassPortraitSvg(cls.id, cls.color)}
         <div>
-          <div class="class-title" style="color:${cls.color}">${cls.name}</div>
+          <div class="class-title" style="color:${safeColor(cls.color)}">${cls.name}</div>
           <div class="class-role">${cls.title || ''}</div>
         </div>
       </div>
@@ -336,8 +337,8 @@ function renderClassModal() {
         <span>SPD: <b>${cls.speed}</b></span>
         <span>CARRY: <b style="color:#38bdf8">${cap} WT</b></span>
       </div>
-      <div class="weapon-box"><strong>Weapon:</strong> ${cls.weapon.name}</div>
-      <div class="skill-box"><strong>Skill:</strong> ${cls.skill.name} (${cls.skill.cooldown}s)<br/><small>${cls.skill.description}</small></div>
+      <div class="weapon-box"><strong>Weapon:</strong> ${cls.weapon.name}<br/><small>${cls.weapon.damage} damage / ${cls.weapon.mag_size} rounds / ${cls.weapon.range} range</small></div>
+      <div class="skill-box"><strong>Skill:</strong> ${cls.skill.name} (${cls.skill.cooldown}s)<br/><small>${cls.skill.description}${cls.skill.radius ? ` Radius: ${cls.skill.radius}.` : cls.skill.range ? ` Range: ${cls.skill.range}.` : ''}</small></div>
       <div class="passive-box"><strong>Passive:</strong> ${cls.passive.name} — <small>${cls.passive.description}</small></div>
       <button class="btn-primary" style="margin-top:auto;padding:8px;">${selected ? '✓ CURRENT CLASS' : 'SELECT ' + cls.name.toUpperCase()}</button>
     `;
@@ -382,14 +383,14 @@ function renderLobbyUI(force = false) {
     const cls = classesConfig[p.class_id] || { name: p.class_id, color: '#38bdf8' };
     const li = document.createElement('div');
     li.className = 'player-row';
-    const leaderBadge = p.id === state.leader_id ? '<span class="badge-leader">★ LEADER</span>' : '';
-    const youBadge = p.id === localPlayerId ? '<span class="badge-you">(YOU)</span>' : '';
-    li.innerHTML = `
+    const leaderBadge = p.id === state.leader_id ? html`<span class="badge-leader">★ LEADER</span>` : '';
+    const youBadge = p.id === localPlayerId ? html`<span class="badge-you">(YOU)</span>` : '';
+    li.innerHTML = html`
       <div class="player-info">
-        <span class="class-dot" style="background:${cls.color}"></span>
+        <span class="class-dot" style="background:${safeColor(cls.color)}"></span>
         <strong>${p.name}</strong> ${youBadge} ${leaderBadge}
       </div>
-      <div class="player-class-tag" style="color:${cls.color}">${p.class_chosen ? cls.name : 'Choosing...'}</div>
+      <div class="player-class-tag" style="color:${safeColor(cls.color)}">${p.class_chosen ? cls.name : 'Choosing...'}</div>
     `;
     playerListEl.appendChild(li);
   }
@@ -399,9 +400,9 @@ function renderLobbyUI(force = false) {
   lobbySharedStash.innerHTML =
     stash.length === 0
       ? '<div style="color:#64748b;font-size:0.75rem;">Shared loot is empty. Extract loot from missions!</div>'
-      : stash
+      : joinHtml(stash
           .map(
-            (st) => `
+            (st) => html`
         <div class="stash-item">
           <div>
             <strong>${st.name}</strong>
@@ -410,7 +411,7 @@ function renderLobbyUI(force = false) {
           <span style="color:#fbbf24;font-weight:800;">x${st.count}</span>
         </div>`
           )
-          .join('');
+          );
 
   // 3. Mission & Persisted WFC Level Selection (Leader Controlled)
   const lockMsg = localLockNotice || state.last_lock_reason;
@@ -446,12 +447,12 @@ function renderLobbyUI(force = false) {
     card.className = `card mission-card ${isMissionSelected ? 'selected' : ''} ${!isLeader || !anyMissionUnlocked ? 'disabled-card' : ''}`;
 
     const missionLockBanner = !anyMissionUnlocked && missionLockReason
-      ? `<div style="margin:6px 0;padding:6px 10px;border-radius:6px;background:rgba(245,158,11,0.15);border:1px solid #f59e0b;color:#fcd34d;font-size:0.78rem;font-weight:600;">
+      ? html`<div style="margin:6px 0;padding:6px 10px;border-radius:6px;background:rgba(245,158,11,0.15);border:1px solid #f59e0b;color:#fcd34d;font-size:0.78rem;font-weight:600;">
            🔒 LOCKED — ${missionLockReason}
          </div>`
       : '';
 
-    const levelsHtml = missionLevels
+    const levelsHtml = joinHtml(missionLevels
       .map((lvl) => {
         const isSel = selectedLevel && selectedLevel.level_id === lvl.level_id;
         const isUnlocked = lvl.unlocked !== false;
@@ -475,9 +476,9 @@ function renderLobbyUI(force = false) {
         ).join(', ');
         const reqHtml =
           !isUnlocked && lvl.lock_reason
-            ? `<div style="color:#fca5a5;font-size:0.72rem;margin-top:3px;font-weight:600;">↳ Requires: ${lvl.lock_reason}</div>`
+            ? html`<div style="color:#fca5a5;font-size:0.72rem;margin-top:3px;font-weight:600;">↳ Requires: ${lvl.lock_reason}</div>`
             : '';
-        return `
+        return html`
           <div class="level-item" data-level-id="${lvl.level_id}" data-unlocked="${isUnlocked}" data-lock-reason="${lvl.lock_reason || ''}" style="margin-top:6px;padding:8px 10px;border-radius:6px;border:2px solid ${isSel ? '#38bdf8' : isUnlocked ? '#1e293b' : '#451a1a'};background:${isSel ? 'rgba(56,189,248,0.16)' : isUnlocked ? '#0f172a' : 'rgba(127,29,29,0.18)'};display:flex;justify-content:space-between;align-items:center;font-size:0.78rem;cursor:${isLeader && isUnlocked ? 'pointer' : 'not-allowed'};">
             <div>
               <strong>${lvl.name}</strong> <span style="color:#94a3b8">(Seed ${lvl.seed})</span><br/>
@@ -488,19 +489,19 @@ function renderLobbyUI(force = false) {
           </div>
         `;
       })
-      .join('');
+      );
 
-    card.innerHTML = `
+    card.innerHTML = html`
       <div class="card-header">
         <span class="mission-title">${anyMissionUnlocked ? '🔓' : '🔒'} ${m.name}</span>
-        <span class="difficulty-tag diff-${m.difficulty.toLowerCase()}">${m.difficulty}</span>
+        <span class="difficulty-tag diff-${['standard', 'hard', 'extreme'].includes(m.difficulty.toLowerCase()) ? m.difficulty.toLowerCase() : 'standard'}">${m.difficulty}</span>
       </div>
       <p class="mission-desc">${m.description}</p>
       ${missionLockBanner}
       <div class="segments-preview">${levelsHtml}</div>
       ${
         isLeader && anyMissionUnlocked
-          ? `<button class="btn-secondary gen-level-btn" data-mission-id="${m.id}" style="margin-top:8px;width:100%;font-size:0.78rem;border-color:#38bdf8;color:#38bdf8;">+ GENERATE NEW WFC LEVEL (ENTERS TESTING PHASE)</button>`
+          ? html`<button class="btn-secondary gen-level-btn" data-mission-id="${m.id}" style="margin-top:8px;width:100%;font-size:0.78rem;border-color:#38bdf8;color:#38bdf8;">+ GENERATE NEW WFC LEVEL (ENTERS TESTING PHASE)</button>`
           : ''
       }
     `;
@@ -568,12 +569,12 @@ function renderLobbyUI(force = false) {
 }
 
 function itemChipHtml(item, ownerId, canEdit) {
-  if (!item) return '<span style="color:#475569">— empty —</span>';
+  if (!item) return html`<span style="color:#475569">— empty —</span>`;
   const back =
     canEdit && item.category !== 'special_ability'
-      ? `<button class="mini-btn prep-return-btn" data-item-id="${item.id}" data-owner="${ownerId}" title="Return to crate">↩</button>`
+      ? html`<button class="mini-btn prep-return-btn" data-item-id="${item.id}" data-owner="${ownerId}" title="Return to crate">↩</button>`
       : '';
-  return `<span><strong>${item.name}</strong> <span style="color:#38bdf8">${item.weight || 1}wt</span></span>${back}`;
+  return html`<span><strong>${item.name}</strong> <span style="color:#38bdf8">${item.weight || 1}wt</span></span>${back}`;
 }
 
 function renderPrepUI(force = false) {
@@ -604,9 +605,9 @@ function renderPrepUI(force = false) {
   prepCrateList.innerHTML =
     stash.length === 0
       ? '<div style="color:#64748b;font-size:0.8rem;">The squad loot crate is empty.</div>'
-      : stash
+      : joinHtml(stash
           .map(
-            (st) => `
+            (st) => html`
         <div class="prep-crate-item" draggable="true" data-template-id="${st.template_id}">
           <div style="display:flex;justify-content:space-between;">
             <strong>${st.name}</strong><span style="color:#fbbf24;font-weight:800;">x${st.count}</span>
@@ -614,7 +615,7 @@ function renderPrepUI(force = false) {
           <span style="color:#94a3b8;font-size:0.7rem;">${st.weight} wt • ${(st.category || '').replace('_', ' ')}</span>
         </div>`
           )
-          .join('');
+          );
   prepCrateList.querySelectorAll('.prep-crate-item').forEach((el) => {
     el.addEventListener('click', () => {
       send({ type: 'stash_to_player', template_id: el.dataset.templateId, target_player_id: localPlayerId });
@@ -644,53 +645,53 @@ function renderPrepUI(force = false) {
     }
     const isMe = p.id === localPlayerId;
     const cls = classesConfig[p.class_id] || { name: p.class_id, color: '#38bdf8', title: '' };
-    const inv = p.inventory || { equipped: {}, storage: [], current_weight: 0, max_weight: 15 };
+    const inv = p.inventory || { equipped: {}, storage: [], current_weight: 0, max_weight: cls.carry_capacity };
     const eq = inv.equipped || {};
-    const pct = Math.min(100, Math.round(((inv.current_weight || 0) / Math.max(1, inv.max_weight || 15)) * 100));
+    const pct = Math.min(100, Math.round(((inv.current_weight || 0) / Math.max(1, inv.max_weight)) * 100));
     const storage = inv.storage || [];
 
-    slotEl.innerHTML = `
+    slotEl.innerHTML = html`
       <div class="prep-player-card ${isMe ? 'is-me' : ''} ${p.ready ? 'is-ready' : ''}">
         <div style="display:flex;gap:10px;align-items:center;">
           ${getClassPortraitSvg(p.class_id, cls.color)}
           <div style="flex:1;">
-            <div style="font-weight:800;">${p.name} ${isMe ? '<span class="badge-you">(YOU)</span>' : ''}</div>
-            <div style="color:${cls.color};font-size:0.8rem;font-weight:700;">${cls.name}</div>
-            <div style="font-size:0.72rem;color:#94a3b8;margin-top:3px;">Carry: <b style="color:#38bdf8">${inv.current_weight || 0} / ${inv.max_weight || 15} WT</b></div>
+            <div style="font-weight:800;">${p.name} ${isMe ? html`<span class="badge-you">(YOU)</span>` : ''}</div>
+            <div style="color:${safeColor(cls.color)};font-size:0.8rem;font-weight:700;">${cls.name}</div>
+            <div style="font-size:0.72rem;color:#94a3b8;margin-top:3px;">Carry: <b style="color:#38bdf8">${inv.current_weight || 0} / ${inv.max_weight} WT</b></div>
             <div class="inv-weight-bar-wrap" style="margin-top:3px;"><div class="inv-weight-bar-fill" style="width:${pct}%;background:${pct >= 90 ? '#ef4444' : '#38bdf8'}"></div></div>
           </div>
         </div>
         <div class="inv-section-label">EQUIPPED</div>
         <div class="prep-inv-grid">
-          ${SLOT_DEFS.map(
-            (sd) => `<div class="inv-slot-row" style="flex-direction:column;align-items:flex-start;gap:2px;">
+          ${joinHtml(SLOT_DEFS.map(
+            (sd) => html`<div class="inv-slot-row" style="flex-direction:column;align-items:flex-start;gap:2px;">
               <span style="color:#94a3b8;font-size:0.64rem;">${sd.label}</span>
               <div style="display:flex;justify-content:space-between;width:100%;gap:4px;">${itemChipHtml(eq[sd.key], p.id, true)}</div>
             </div>`
-          ).join('')}
+          ))}
         </div>
         <div class="inv-section-label">STORAGE (${storage.length} items)</div>
         <div class="inv-storage-list">
           ${
             storage.length === 0
-              ? '<div style="color:#64748b;font-size:0.72rem;">Drop items here from the crate.</div>'
-              : storage
+              ? html`<div style="color:#64748b;font-size:0.72rem;">Drop items here from the crate.</div>`
+              : joinHtml(storage
                   .map(
-                    (it) => `<div class="inv-storage-item" draggable="true" data-item-id="${it.id}" data-owner="${p.id}">
+                    (it) => html`<div class="inv-storage-item" draggable="true" data-item-id="${it.id}" data-owner="${p.id}">
                       ${itemChipHtml(it, p.id, true)}
                     </div>`
                   )
-                  .join('')
+                  )
           }
         </div>
         ${
           isMe
-            ? `<div style="display:flex;gap:6px;margin-top:auto;">
+            ? html`<div style="display:flex;gap:6px;margin-top:auto;">
                  <button class="btn-secondary prep-min-btn" style="font-size:0.72rem;">⚡ Min Loadout</button>
                  <button class="btn-secondary prep-class-btn" style="font-size:0.72rem;">⇄ Class</button>
                </div>
                <button class="prep-ready-btn ${p.ready ? 'ready' : ''}">${p.ready ? '✓ READY — CLICK TO CANCEL' : 'READY UP'}</button>`
-            : `<div class="prep-ready-btn ${p.ready ? 'ready' : ''}" style="cursor:default;text-align:center;">${p.ready ? '✓ READY' : 'PREPARING...'}</div>`
+            : html`<div class="prep-ready-btn ${p.ready ? 'ready' : ''}" style="cursor:default;text-align:center;">${p.ready ? '✓ READY' : 'PREPARING...'}</div>`
         }
       </div>
     `;
@@ -739,18 +740,24 @@ function updateHUD() {
   const me = getLocalPlayer();
   const isTest = Boolean(state.map.test_mode);
   const titlePrefix = isTest ? '[TESTING PHASE — NO ENEMIES/LOOT] ' : '';
-  hudMissionTitle.textContent = `${titlePrefix}${state.map.level_name || state.map.mission_name} (${state.map.segments.length} Sectors)`;
+  hudMissionTitle.textContent = `${titlePrefix}${state.map.level_name || state.map.world_name || state.map.mission_name} (${state.map.segments.length} Sectors)`;
+  const hub = state.world_kind === 'hub';
+  document.getElementById('hub-controls').classList.toggle('hidden', !hub);
+  document.getElementById('hub-ready-btn').textContent = me?.ready ? 'Cancel Ready' : 'Ready Up';
+  document.getElementById('hub-ready-btn').disabled = state.phase !== 'prep';
 
   // Objective progress
-  const puzzles = state.map.puzzles || [];
-  const solvedCount = puzzles.filter((p) => p.solved).length;
-  if (state.phase === 'dropship') {
+  const objectives = (state.map.objectives || []).filter(o => o.required);
+  const solvedCount = objectives.filter((p) => p.completed).length;
+  if (!state.world_capabilities?.objectives) {
+    hudObjectiveText.textContent = 'Noncombat world: [E] or click an interaction.';
+  } else if (state.phase === 'dropship') {
     hudObjectiveText.textContent = `Dropship docking... Ramp opens in ${state.dropship_timer}s`;
-  } else if (solvedCount < puzzles.length) {
-    const nextPz = puzzles.find((p) => !p.solved);
-    hudObjectiveText.textContent = `${isTest ? 'Test ' : ''}Objective (${solvedCount}/${puzzles.length}): ${nextPz ? nextPz.label : 'Complete Terminals'}`;
+  } else if (solvedCount < objectives.length) {
+    const nextObjective = objectives.find((p) => !p.completed);
+    hudObjectiveText.textContent = `${isTest ? 'Test ' : ''}Objective (${solvedCount}/${objectives.length}): ${nextObjective.label}`;
   } else {
-    hudObjectiveText.textContent = isTest
+    hudObjectiveText.textContent = !state.world_capabilities?.extraction ? 'WORLD OBJECTIVES COMPLETE' : isTest
       ? 'TEST OBJECTIVES UNLOCKED — Reach Extraction Pad to Verify Level!'
       : 'PRIMARY COMPLETE — All operatives proceed to Extraction Pad!';
   }
@@ -760,14 +767,16 @@ function updateHUD() {
     const hpPct = Math.max(0, Math.min(100, (me.hp / me.max_hp) * 100));
     hudHpFill.style.width = `${hpPct}%`;
     hudHpText.textContent = me.downed ? 'DOWNED (NEED REVIVE)' : `${me.hp} / ${me.max_hp} HP`;
-    hudAmmoText.textContent =
+    hudAmmoText.textContent = !state.world_capabilities?.combat ? 'NONCOMBAT' :
       me.reload_timer > 0
         ? `RELOADING (${me.reload_timer.toFixed(1)}s)`
         : `${me.ammo} / ${me.max_ammo}${me.running ? (isLocalPlayerLightWeapon(me) ? ' [SPRINTING]' : ' [SPRINT: LIGHT WEAPONS ONLY]') : ''}`;
 
     if (cls) {
-      hudSkillName.textContent = `[SPACE] ${cls.skill.name}`;
-      if (me.skill_timer > 0) {
+      hudSkillName.textContent = state.world_capabilities?.combat ? `[SPACE] ${cls.skill.name}` : cls.skill.name;
+      if (!state.world_capabilities?.combat) {
+        hudSkillStatus.textContent = 'DISABLED';
+      } else if (me.skill_timer > 0) {
         hudSkillStatus.textContent = `ACTIVE (${me.skill_timer.toFixed(1)}s)`;
         hudSkillStatus.className = 'skill-ready';
       } else if (me.skill_cooldown > 0) {
@@ -820,9 +829,9 @@ function renderHudInventory(me) {
   const weightEl = hudInvWeight || document.getElementById('hud-inv-weight');
   const fillEl = hudInvWeightFill || document.getElementById('hud-inv-weight-fill');
 
-  const pct = Math.min(100, Math.round(((inv.current_weight || 0) / Math.max(1, inv.max_weight || 15)) * 100));
+  const pct = Math.min(100, Math.round(((inv.current_weight || 0) / Math.max(1, inv.max_weight)) * 100));
   if (weightEl) {
-    weightEl.textContent = `${inv.current_weight || 0} / ${inv.max_weight || 15} WT`;
+    weightEl.textContent = `${inv.current_weight || 0} / ${inv.max_weight} WT`;
   }
   if (fillEl) {
     fillEl.style.width = `${pct}%`;
@@ -864,11 +873,11 @@ function renderHudInventory(me) {
   ];
 
   if (equippedEl) {
-    equippedEl.innerHTML = equippedRows
+    equippedEl.innerHTML = joinHtml(equippedRows
       .map((r) => {
         const name = r.item ? r.item.name : 'Empty';
         const wStr = r.item && r.item.weight ? ` (${r.item.weight}wt)` : '';
-        return `
+        return html`
           <div class="inv-slot-row ${r.active ? 'active-weapon' : ''}">
             <div>
               <span style="color:#94a3b8;font-size:0.66rem;">${r.label}</span><br/>
@@ -877,24 +886,24 @@ function renderHudInventory(me) {
             <div style="display:flex;gap:4px;">
               ${
                 r.switchable && r.item && !r.active
-                  ? `<button class="mini-btn inv-switch-btn" data-slot="${r.slot}">Use</button>`
+                   ? html`<button class="mini-btn inv-switch-btn" data-slot="${r.slot}">Use</button>`
                   : ''
               }
               ${
                 r.usable
-                  ? `<button class="mini-btn inv-use-quick-btn">Use [F]</button>`
+                   ? html`<button class="mini-btn inv-use-quick-btn">Use [F]</button>`
                   : ''
               }
               ${
                 r.item && r.slot !== 'special_ability'
-                  ? `<button class="mini-btn inv-unequip-btn" data-slot="${r.slot}">Store</button>`
+                   ? html`<button class="mini-btn inv-unequip-btn" data-slot="${r.slot}">Store</button>`
                   : ''
               }
             </div>
           </div>
         `;
       })
-      .join('');
+      );
 
     equippedEl.querySelectorAll('.inv-switch-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -919,25 +928,27 @@ function renderHudInventory(me) {
       storageEl.innerHTML =
         '<div style="color:#64748b;font-size:0.72rem;padding:4px 0;">Pack empty. Press [E] near items or drag items here from an open chest!</div>';
     } else {
-      storageEl.innerHTML = storage
+      storageEl.innerHTML = joinHtml(storage
         .map((it) => {
           const cat = it.category || it.slot;
           const canEquip = ['primary_weapon', 'secondary_weapon', 'quick_use'].includes(cat);
-          const canUse = Boolean(it.consumable || it.effect);
-          return `
+          const effect = itemsConfig[it.template_id]?.effect;
+          const canUse = ['heal', 'ammo_refill', 'turret', 'sonar'].includes(effect?.behavior);
+          const lootValue = effect?.behavior === 'loot' ? (it.value?.loot ?? effect.loot) : null;
+          return html`
             <div class="inv-storage-item" data-item-id="${it.id}">
               <div>
-                <strong>${it.name}</strong> <span style="color:#38bdf8">(${it.weight || 1}wt)</span>
+                <strong>${it.name}</strong> <span style="color:#38bdf8">(${it.weight || 1}wt)</span>${lootValue !== null ? html` <small>Value: ${lootValue}</small>` : ''}
               </div>
               <div style="display:flex;gap:3px;">
-                ${canUse ? `<button class="mini-btn inv-use-btn" data-item-id="${it.id}">Use</button>` : ''}
-                ${canEquip ? `<button class="mini-btn inv-equip-btn" data-item-id="${it.id}">Equip</button>` : ''}
+                ${canUse ? html`<button class="mini-btn inv-use-btn" data-item-id="${it.id}">Use</button>` : ''}
+                ${canEquip ? html`<button class="mini-btn inv-equip-btn" data-item-id="${it.id}">Equip</button>` : ''}
                 <button class="mini-btn inv-drop-btn" data-item-id="${it.id}" title="Drop on ground">Drop</button>
               </div>
             </div>
           `;
         })
-        .join('');
+        );
 
       storageEl.querySelectorAll('.inv-use-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -959,6 +970,12 @@ function renderHudInventory(me) {
 }
 
 if (hudInventorySidebar) {
+  document.getElementById('inventory-toggle').addEventListener('click', event => {
+    const expanded = hudInventorySidebar.classList.toggle('inventory-expanded');
+    event.currentTarget.setAttribute('aria-expanded', String(expanded));
+    event.currentTarget.textContent = expanded ? 'Hide Inventory' : 'Show Inventory';
+    input.reset();
+  });
   hudInventorySidebar.addEventListener('dragover', (ev) => {
     ev.preventDefault();
     hudInventorySidebar.classList.add('drag-target');
@@ -972,7 +989,7 @@ if (hudInventorySidebar) {
     try {
       const data = JSON.parse(ev.dataTransfer.getData('text/plain'));
       if (data.source === 'crate' && data.crate_id && data.item_id) {
-        send({ type: 'take_crate_item', crate_id: data.crate_id, item_id: data.item_id });
+        if (activeChest?.id === data.crate_id) modals.request({ type: 'take_crate_item', crate_id: data.crate_id, item_id: data.item_id }, data.crate_id);
       }
     } catch (_) {}
   });
@@ -992,7 +1009,7 @@ function initChestBodyEvents() {
       ev.stopPropagation();
       const itemId = btn.dataset.itemId;
       if (itemId) {
-        send({ type: 'take_crate_item', crate_id: activeChest.id, item_id: itemId });
+        modals.request({ type: 'take_crate_item', crate_id: activeChest.id, item_id: itemId }, activeChest.id);
       }
     }
   });
@@ -1018,7 +1035,7 @@ function renderChestModal(force = false) {
   chestModal.classList.remove('hidden');
   chestTitle.textContent = activeChest.name || activeChest.label || 'SUPPLY CRATE';
   const items = activeChest.items || [];
-  const itemsKey = `${activeChest.id}_${items.map((it) => it.id).join(',')}`;
+  const itemsKey = JSON.stringify([activeChest, modals.busy]);
   if (!force && lastRenderedChestItemsKey === itemsKey) {
     return;
   }
@@ -1029,9 +1046,9 @@ function renderChestModal(force = false) {
       '<div style="color:#64748b;font-size:0.85rem;padding:12px 0;">This chest is empty.</div>';
     return;
   }
-  chestBody.innerHTML = items
+  chestBody.innerHTML = joinHtml(items
     .map(
-      (it) => `
+      (it) => html`
       <div class="chest-item-card" draggable="true" data-item-id="${it.id}">
         <div>
           <strong style="color:#f8fafc;font-size:0.85rem;">${it.name}</strong>
@@ -1042,81 +1059,16 @@ function renderChestModal(force = false) {
       </div>
     `
     )
-    .join('');
+    );
+  chestBody.querySelectorAll('button').forEach(button => { button.disabled = modals.busy; });
 }
 
 function renderPuzzleModal() {
   if (!activePuzzle) return;
   puzzleModal.classList.remove('hidden');
   puzzleTitle.textContent = activePuzzle.label || 'SECURITY TERMINAL';
-  puzzleBody.innerHTML = '';
-
-  const me = getLocalPlayer();
-  const pdata = activePuzzle.data;
-
-  if (pdata.type === 'power_reroute') {
-    const info = document.createElement('p');
-    info.textContent = 'Align all 4 power conduit relays to 0° [━] to unlock the bulkhead door:';
-    puzzleBody.appendChild(info);
-
-    const glyphs = ['━', '┏', '┃', '┗'];
-    const row = document.createElement('div');
-    row.className = 'puzzle-nodes-row';
-
-    pdata.nodes.forEach((val, idx) => {
-      const btn = document.createElement('button');
-      btn.className = `puzzle-node-btn ${val === 0 ? 'aligned' : ''}`;
-      btn.textContent = `${glyphs[val % 4]} (${val * 90}°)`;
-      btn.addEventListener('click', () => {
-        send({
-          type: 'puzzle_action',
-          puzzle_id: activePuzzle.id,
-          action: { action: 'rotate', node_index: idx },
-        });
-      });
-      row.appendChild(btn);
-    });
-    puzzleBody.appendChild(row);
-  } else if (pdata.type === 'signal_decrypt') {
-    const seqStr = pdata.target_sequence
-      .map((s, i) => (i < pdata.progress ? `[✓ ${s}]` : i === pdata.progress ? `[👉 ${s}]` : s))
-      .join('  ');
-    const info = document.createElement('p');
-    info.innerHTML = `Enter Target Hex Sequence in order:<br/><strong style="font-size:1.2rem;color:#38bdf8">${seqStr}</strong>`;
-    puzzleBody.appendChild(info);
-
-    const grid = document.createElement('div');
-    grid.className = 'puzzle-nodes-row';
-    for (const sym of pdata.options) {
-      const btn = document.createElement('button');
-      btn.className = 'puzzle-node-btn';
-      btn.textContent = sym;
-      btn.addEventListener('click', () => {
-        send({
-          type: 'puzzle_action',
-          puzzle_id: activePuzzle.id,
-          action: { action: 'input_symbol', symbol: sym },
-        });
-      });
-      grid.appendChild(btn);
-    }
-    puzzleBody.appendChild(grid);
-  }
-
-  // Tech Class Hardware Bypass Button
-  if (me && me.class_id === 'tech') {
-    const bypassBtn = document.createElement('button');
-    bypassBtn.className = 'tech-bypass-btn';
-    bypassBtn.textContent = '⚡ [TECH PASSIVE] HARDWARE OVERRIDE (INSTANT SOLVE)';
-    bypassBtn.addEventListener('click', () => {
-      send({
-        type: 'puzzle_action',
-        puzzle_id: activePuzzle.id,
-        action: { action: 'tech_bypass' },
-      });
-    });
-    puzzleBody.appendChild(bypassBtn);
-  }
+  renderPuzzle(puzzleBody, activePuzzle, action => modals.request({ type: 'puzzle_action', puzzle_id: activePuzzle.id, action }, modals.active.targetId),
+    { now: state.simulation_time, player: getLocalPlayer(), busy: modals.busy });
 }
 
 // UI Button Listeners
@@ -1146,8 +1098,7 @@ prepBackBtn.addEventListener('click', () => {
 
 if (closeChestBtn) {
   closeChestBtn.addEventListener('click', () => {
-    chestModal.classList.add('hidden');
-    activeChest = null;
+    modals.close();
     lastRenderedChestItemsKey = null;
   });
 }
@@ -1157,129 +1108,61 @@ returnLobbyBtn.addEventListener('click', () => {
 });
 
 closePuzzleBtn.addEventListener('click', () => {
-  puzzleModal.classList.add('hidden');
-  activePuzzle = null;
+  modals.close();
 });
+document.getElementById('close-service-btn').addEventListener('click', () => { modals.close(); lastServiceSig = ''; });
+document.getElementById('hub-class-btn').addEventListener('click', renderClassModal);
+document.getElementById('hub-ready-btn').addEventListener('click', () => send({ type: 'toggle_ready' }));
 
 // Keyboard & Mouse Controls
-window.addEventListener('keydown', (e) => {
-  if ((!state || state.phase === 'lobby') && document.activeElement === callsignInput) return;
-  const code = e.code;
-  if (code === 'KeyW' || code === 'ArrowUp') keys.up = true;
-  if (code === 'KeyS' || code === 'ArrowDown') keys.down = true;
-  if (code === 'KeyA' || code === 'ArrowLeft') keys.left = true;
-  if (code === 'KeyD' || code === 'ArrowRight') keys.right = true;
-  if (code === 'ShiftLeft' || code === 'ShiftRight' || e.key === 'Shift') keys.shift = true;
-
-  if (code === 'KeyR') send({ type: 'reload' });
-  if (code === 'Digit1') send({ type: 'inventory_action', action: 'switch_weapon', slot: 'primary_weapon' });
-  if (code === 'Digit2') send({ type: 'inventory_action', action: 'switch_weapon', slot: 'secondary_weapon' });
-  if (code === 'KeyF') send({ type: 'inventory_action', action: 'use_item', slot: 'quick_use' });
-  if (code === 'Space' || code === 'KeyQ') {
-    e.preventDefault();
-    send({ type: 'skill' });
-  }
-  if (code === 'KeyE' || e.key === 'e' || e.key === 'E') {
-    e.preventDefault();
-    if (activePuzzle) {
-      puzzleModal.classList.add('hidden');
-      activePuzzle = null;
-    } else if (activeChest) {
-      chestModal.classList.add('hidden');
-      activeChest = null;
-      lastRenderedChestItemsKey = null;
-    } else {
-      send({ type: 'interact' });
-    }
-  }
-  if (code === 'Escape') {
-    if (activePuzzle) {
-      puzzleModal.classList.add('hidden');
-      activePuzzle = null;
-    }
-    if (activeChest) {
-      chestModal.classList.add('hidden');
-      activeChest = null;
-      lastRenderedChestItemsKey = null;
-    }
-  }
-});
-
-window.addEventListener('keyup', (e) => {
-  const code = e.code;
-  if (code === 'KeyW' || code === 'ArrowUp') keys.up = false;
-  if (code === 'KeyS' || code === 'ArrowDown') keys.down = false;
-  if (code === 'KeyA' || code === 'ArrowLeft') keys.left = false;
-  if (code === 'KeyD' || code === 'ArrowRight') keys.right = false;
-  if (code === 'ShiftLeft' || code === 'ShiftRight' || e.key === 'Shift') keys.shift = false;
-});
+window.addEventListener('keydown', event => input.keydown(event));
+window.addEventListener('keyup', event => input.keyup(event));
+window.addEventListener('blur', () => { input.focused = false; input.reset(); });
+window.addEventListener('focus', () => { input.focused = true; input.reset(); });
+document.addEventListener('visibilitychange', () => { input.hidden = document.hidden; input.reset(); });
+document.addEventListener('focusin', () => input.reset());
+window.addEventListener('pointercancel', () => input.reset());
 
 canvas.addEventListener('mousemove', (e) => {
-  mouseScreen.x = e.clientX;
-  mouseScreen.y = e.clientY;
+  Object.assign(mouseScreen, canvasPoint(e, canvas, camera));
 });
 
 canvas.addEventListener('mousedown', (e) => {
-  if (e.button === 0 && !activePuzzle && !activeChest) {
+  if (e.button === 0 && input.allowed(document.activeElement)) {
     const me = getLocalPlayer();
     if (me && !me.downed && state && state.map) {
-      const mw = isoToWorld(e.clientX, e.clientY, camera);
-      const lootItems = state.map.loot || [];
-      const nearbyLoot = lootItems.find(
-        (lt) => !lt.collected && Math.hypot(mw.x - lt.x, mw.y - lt.y) <= 1.8 && Math.hypot(me.x - lt.x, me.y - lt.y) <= 3.8
-      );
-      if (nearbyLoot) {
-        send({ type: 'pickup_item', item_id: nearbyLoot.id });
-        firing = false;
-        return;
-      }
-      const crates = state.map.crates || [];
-      const nearbyCrate = crates.find(
-        (cr) => Math.hypot(mw.x - cr.x, mw.y - cr.y) <= 1.8 && Math.hypot(me.x - cr.x, me.y - cr.y) <= 3.8
-      );
-      if (nearbyCrate) {
-        send({ type: 'interact' });
-        firing = false;
+      Object.assign(mouseScreen, canvasPoint(e, canvas, camera));
+      const mw = isoToWorld(mouseScreen.x, mouseScreen.y, camera);
+      const targets = [...(state.map.interactions || []), ...(state.map.crates || []), ...(state.map.puzzles || []), ...(state.map.loot || [])]
+        .filter(target => Math.hypot(mw.x - target.x, mw.y - target.y) <= 1.0)
+        .sort((a, b) => Math.hypot(mw.x - a.x, mw.y - a.y) - Math.hypot(mw.x - b.x, mw.y - b.y));
+      if (targets.length) {
+        modals.request({ type: 'interact', target_id: targets[0].id }, targets[0].id);
+        input.firing = false;
         return;
       }
     }
-    firing = true;
+    input.firing = Boolean(state?.world_capabilities?.combat);
   }
 });
 
 window.addEventListener('mouseup', (e) => {
   if (e.button === 0) {
-    firing = false;
+    input.firing = false;
   }
 });
 
 // 30Hz Network Input Sender
 setInterval(() => {
-  if (!state || state.phase === 'lobby') return;
+  if (!state?.map || !getLocalPlayer()?.capabilities?.can_move) return;
   mouseWorld = isoToWorld(mouseScreen.x, mouseScreen.y, camera);
-  const move = activePuzzle || activeChest
-    ? { dx: 0, dy: 0 }
-    : screenInputToWorldDelta(keys.up, keys.down, keys.left, keys.right);
-
-  const me = getLocalPlayer();
-  const isLight = isLocalPlayerLightWeapon(me);
-  // When running with heavy weapons, weapon firing is blocked
-  const canShoot = !keys.shift || isLight;
-
-  send({
-    type: 'input',
-    dx: move.dx,
-    dy: move.dy,
-    aim_x: mouseWorld.x,
-    aim_y: mouseWorld.y,
-    firing: firing && canShoot && !activePuzzle && !activeChest,
-    running: Boolean(keys.shift),
-  });
+  send(input.intent(document.activeElement));
 }, 1000 / 30);
 
 // 60fps Render Loop with Smooth Camera Tracking
 function animate() {
-  if (state && state.phase !== 'lobby' && state.map) {
+  if (camera.pixelRatio !== (window.devicePixelRatio || 1)) resizeCanvas();
+  if (state?.map) {
     const me = getLocalPlayer();
     if (me) {
       camera.x += (me.x - camera.x) * 0.14;
@@ -1291,12 +1174,6 @@ function animate() {
   requestAnimationFrame(animate);
 }
 
-// Pre-warm audio manager on first user action or start
-const unlockAudio = () => {
-  audioManager.init().catch(console.error);
-};
-window.addEventListener('click', unlockAudio);
-window.addEventListener('keydown', unlockAudio);
-window.addEventListener('pointerdown', unlockAudio);
-connectWebSocket();
+window.addEventListener('pagehide', () => { input.reset(); audioManager.dispose(); renderer.dispose(); });
+session.connect();
 requestAnimationFrame(animate);

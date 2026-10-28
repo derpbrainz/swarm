@@ -30,7 +30,7 @@
       <section class="panel squad-panel">
         <h2>Squad Roster</h2>
         <div id="player-list" class="player-list"></div>
-        <button id="change-class-btn" type="button" class="btn-secondary" onclick="window.openClassModal && window.openClassModal()" style="border-color:#38bdf8;color:#38bdf8;cursor:pointer;">⇄ Change My Class</button>
+        <button id="change-class-btn" type="button" class="btn-secondary" style="border-color:#38bdf8;color:#38bdf8;cursor:pointer;">⇄ Change My Class</button>
         <div class="controls-guide">
           <h3>Tactical Controls</h3>
           <ul>
@@ -104,6 +104,7 @@
     <div class="hud-top">
       <div id="hud-mission-title" class="hud-mission-title">SECTOR</div>
       <div id="hud-objective-text" class="hud-objective-text">Stand by...</div>
+      <div id="hub-controls" class="hidden"><button id="hub-class-btn" class="btn-secondary">Change Class</button><button id="hub-ready-btn" class="btn-secondary">Ready Up</button></div>
     </div>
 
     <!-- Bottom-Left Operative Status HUD -->
@@ -126,6 +127,7 @@
 
     <!-- Right-Side Player Inventory Sidebar -->
     <aside id="hud-inventory-sidebar" class="hud-inventory-sidebar">
+      <button id="inventory-toggle" type="button" class="btn-secondary inventory-toggle" aria-expanded="false">Show Inventory</button>
       <div class="inv-sidebar-header">
         <span>OPERATIVE INVENTORY</span>
         <span id="hud-inv-weight" class="inv-weight-badge">0 / 24 WT</span>
@@ -143,7 +145,7 @@
 
     <!-- Chest / Crate Loot Overlay Modal -->
     <div id="chest-modal" class="modal-backdrop hidden" style="background:rgba(4,7,13,0.45);">
-      <div class="modal-card" style="min-width:420px;max-width:480px;">
+      <div class="modal-card" style="max-width:480px;">
         <div class="modal-header">
           <h3 id="chest-title">SUPPLY CRATE</h3>
           <button id="close-chest-btn" class="btn-close">✕ [ESC]</button>
@@ -154,6 +156,12 @@
     </div>
 
     <!-- Interactive Puzzle Modal -->
+    <div id="service-modal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <div class="modal-header"><h3 id="service-title">Console</h3><button id="close-service-btn" class="btn-close">[ESC]</button></div>
+        <div id="service-body" class="modal-body"></div>
+      </div>
+    </div>
     <div id="puzzle-modal" class="modal-backdrop hidden">
       <div class="modal-card">
         <div class="modal-header">
@@ -174,6 +182,7 @@
     </div>
   </div>
 
+  <div id="command-feedback" class="command-feedback hidden" role="status" aria-live="polite"></div>
   <script type="module" src="/static/js/main.js?v=20261026c"></script>
 </body>
 </html>

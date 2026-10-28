@@ -82,7 +82,7 @@ def move_with_collisions(
         y += step_dy
         for _ in range(2):
             for wall in walls:
-                if not wall.get("active", True):
+                if not wall.get("active", True) or not wall.get("blocks_movement", True):
                     continue
                 x, y, _ = circle_vs_aabb(x, y, radius, wall)
 
@@ -157,6 +157,48 @@ def has_line_of_sight(
         if segment_intersects_aabb(x1, y1, x2, y2, wall) is not None:
             return False
     return True
+
+
+def swept_circle_intersects_aabb(x1, y1, x2, y2, radius, rect) -> bool:
+    """Conservative capsule test, including thin walls between navigation samples."""
+    expanded = {"x": rect["x"] - radius, "y": rect["y"] - radius,
+                "w": rect["w"] + radius * 2, "h": rect["h"] + radius * 2}
+    return segment_intersects_aabb(x1, y1, x2, y2, expanded) is not None
+
+
+def segment_intersects_circle(x1, y1, x2, y2, cx, cy, radius) -> float | None:
+    """Earliest inclusive contact, including stationary/initial overlap."""
+    dx, dy = x2 - x1, y2 - y1
+    ox, oy = x1 - cx, y1 - cy
+    c = ox * ox + oy * oy - radius * radius
+    if c <= 0:
+        return 0.0
+    a = dx * dx + dy * dy
+    if a == 0:
+        return None
+    b = ox * dx + oy * dy
+    discriminant = b * b - a * c
+    if discriminant < 0:
+        return None
+    t = (-b - math.sqrt(discriminant)) / a
+    return t if 0 <= t <= 1 else None
+
+
+def swept_circle_aabb_entry(x1, y1, x2, y2, radius, rect) -> float | None:
+    """Exact rounded AABB expansion, not false hits at square-expanded corners."""
+    x, y, w, h = (rect[key] for key in ("x", "y", "w", "h"))
+    hits = [segment_intersects_aabb(x1, y1, x2, y2, strip) for strip in (
+        {"x": x - radius, "y": y, "w": w + 2 * radius, "h": h},
+        {"x": x, "y": y - radius, "w": w, "h": h + 2 * radius},
+    )]
+    hits.extend(segment_intersects_circle(x1, y1, x2, y2, cx, cy, radius)
+                for cx, cy in ((x, y), (x + w, y), (x, y + h), (x + w, y + h)))
+    return min((t for t in hits if t is not None), default=None)
+
+
+def collision_path_clear(start, goal, radius, walls) -> bool:
+    return not any(w.get("active", True) and w.get("blocks_movement", True) and swept_circle_intersects_aabb(
+        *start, *goal, radius, w) for w in walls)
 
 
 def raycast_walls(

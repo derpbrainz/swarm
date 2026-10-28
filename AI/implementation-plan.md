@@ -16,22 +16,22 @@ The `Execution Flags` table in this file is the persistent source of stage progr
 
 Inspect the Git branch/upstream, status, diff, and recent history before changes. The review baseline was a clean `main` one commit ahead; recheck rather than assuming that state still holds. Preserve user changes and existing saves. Work on a named branch such as `refactor/data-driven-foundation` unless the user already provided a task branch; do not overwrite an existing branch or switch away from a dirty worktree by discarding work.
 
-The requested push belongs to the executing agent after successful implementation and verification, not to this review. Stage only intended files, review all commits that will be pushed, obey hooks, and never force-push or amend without separate permission. Push the implementation branch with its upstream. A protected branch, missing credentials, or rejected push is a delivery blocker, not task completion. No PR creation or merge into main is included unless subsequently requested.
+Completion requires verified implementation, saved progress records, and a local commit, not a Git push or remote verification. Stage only intended files, review the local changes, obey hooks, and never amend without separate permission. Do not push automatically after a stage or the overall task; pushing requires a separate explicit user request. GitHub credentials, remote access, and branch protection are not completion gates. No PR creation or merge into main is included unless subsequently requested.
 
 ## Recovery Protocol
 
 Flags use `[ ]` for false and `[x]` for true. Both false means not started; started true/finished false means partial, interrupted, or blocked; both true means verified finished. Finished true/started false is invalid. The flags are checkpoints, not locks, evidence of an active agent, or authorization to change scope.
 
 1. At startup or after a disconnect/funding interruption, read this plan's flags and `AI/execution-log.md` before making changes. Rebuild the session task tracker from these files; do not reset existing flags or restart from Stage 01 merely because the conversation is new.
-2. Inspect the current branch, status, diff, recent commits, and relevant files. Reconcile them with the checkpoint, preserving partial implementation and unrelated changes. Flags alone are not proof that files, tests, or remote delivery still match the recorded state.
+2. Inspect the current branch, status, diff, recent commits, and relevant files. Reconcile them with the checkpoint, preserving partial implementation and unrelated changes. Flags alone are not proof that files, tests, or local commits still match the recorded state.
 3. Resume the earliest stage with `Started` checked and `Finished` unchecked. If there is no such stage, begin the earliest unstarted stage whose predecessors are finished. If flags are inconsistent or several stages are unfinished, resolve the earliest incomplete stage and document the discrepancy before proceeding.
-4. Continue from the last verified checkpoint. Inspect whether pending edits, migrations, tests, commits, or pushes already happened before repeating them. Rerun pending/unrecorded verification; never blindly repeat a potentially destructive migration, transfer, commit, or push.
+4. Continue from the last verified checkpoint. Inspect whether pending edits, migrations, tests, or local commits already happened before repeating them. Rerun pending/unrecorded verification; never blindly repeat a potentially destructive migration, transfer, or commit.
 5. Before the first substantive operation, persist the overall and stage `Started` flags and a checkpoint naming the next action. During recovery, leave existing `Started` flags checked and update the checkpoint; do not label recovery as a fresh stage.
 6. Record acceptance evidence before checking a stage's `Finished` flag. If later changes invalidate that evidence, uncheck `Finished`, keep `Started` checked, and log why revalidation is necessary. Mirror the persistent status in the task tracker only after saving it.
 7. A blocker, lost connection, or depleted budget never sets `Finished`. Save the next action and blocker when possible; abrupt interruptions are recovered from the most recent on-disk checkpoint and current worktree.
-8. Stage 13 and the overall `Finished` flags require successful remote delivery verification. If interruption occurs between push and flag update, inspect the remote commit and pending work before continuing. Commit/push changed progress documents as required by final delivery, then verify again; no implementation or repeated commit is needed solely because the previous session failed to report success.
+8. Stage 13 and the overall `Finished` flags require successful implementation and verification, with evidence saved locally. Include the final flags and log in the local completion commit. If interruption occurs before that commit finishes, inspect pending changes, hook results, and local history before claiming completion. No repeated implementation or commit is needed solely because the previous session failed to report success. Do not contact or push to a remote as a recovery requirement.
 
-These local checkpoints survive session disconnection on the same workspace. Until committed and pushed, they do not provide recovery on another machine or after workspace loss. Do not push unfinished work merely to synchronize flags; the final verified push requirement is unchanged.
+These local checkpoints survive session disconnection on the same workspace. Local files and commits do not provide recovery after workspace loss without a separate backup. Remote synchronization is optional and requires an explicit user request; it is not part of stage completion or recovery.
 
 ## Stage 01 - Establish Safe, Reproducible Tests
 
@@ -178,36 +178,36 @@ Review coverage: hardcoded lobby/mission coupling; future intermission world.
 
 Acceptance: hub fixture allows movement/collision/stash interactions with no hostile damage, mission timers, extraction, or squad-defeat checks; squad can depart and return without losing/duplicating inventory; mission tests still pass; world events/IDs/render exploration reset correctly; no UI-only combat suppression; production narrative/NPC/social/account features remain out of scope.
 
-## Stage 13 - Verify, Document, Commit, Push, and Complete
+## Stage 13 - Verify, Document, Commit, and Complete
 
 Review coverage: every finding and delivery requirement.
 
 1. Resolve every planned regression/expected failure or document why a finding is superseded with evidence. Run content validation, all Python tests, frontend unit tests, browser smoke, save migrations/failure injection, seed sweeps/fresh-process determinism, and two-client mission/hub-fixture playthroughs.
 2. Verify test runs do not change real saves. Inspect performance against Stage 01 measurements, logs, memory/queue bounds, missing assets, and browser console. State any test that could not be executed; do not mark its criterion complete without evidence or explicit scope reduction.
 3. Update README to the implemented architecture/protocol and real setup/test/save commands. Explain content versus code versus runtime state, extension recipes, save migration/backup, renderer limits, friendly-fire defaults, single-writer limits, and opt-in fixtures. Remove conflicting old protocol examples. Add CI using the verified commands and temporary stores.
-4. Record the final verified execution log before committing, including pending delivery commands rather than falsely recording a push. Inspect `git status`, `git diff`, `git diff --check`, `git log --oneline -10`, remote/upstream, and every commit that will be pushed. Stage only task files; never include real saves/secrets or unrelated changes.
-5. Make a concise non-amended commit, or intentional small commits if already made during verified stages. Run required hooks and fix failures normally. Push the implementation branch with upstream, without force. Verify the upstream contains the expected commit, not just that a command was attempted.
-6. After successful push verification, record delivery evidence and check Stage 13 and the overall `Finished` flags. Commit and push the resulting plan/log updates, verify the remote again, and only then mark the mirrored execution task tracker complete. If delivery of those updates fails, keep tracker completion pending and log the failure; recovery must verify pending checkpoint delivery even when local flags are checked. Give the final branch, commit SHA, remote destination, test results, and honest residual limitations.
+4. Record final implementation and verification evidence in the execution log. Inspect `git status`, `git diff`, `git diff --check`, `git log --oneline -10`, and the intended local changes. Stage only task files; never include real saves/secrets or unrelated changes.
+5. After all implementation and verification gates pass, check Stage 13 and the overall `Finished` flags and include the updated plan/log in a concise local completion commit. Run required hooks and fix failures normally; never amend without separate permission. If the commit or a hook fails, uncheck the final `Finished` flags and record the blocker before retrying. No automatic push or remote verification is required or authorized by this plan.
+6. Verify the local commit contains the intended implementation and final progress documents, then mark the mirrored execution task tracker complete. On recovery, inspect local history and pending changes even when local flags are checked. Give the final branch, local commit SHA, test results, and honest residual limitations; do not claim the work was pushed.
 
-Acceptance: all required gates pass; documentation matches actual code; intended changes and final progress documents are committed and present on the remote; no unintended dirty files or runtime saves remain; all stage and overall flags are finished and the mirrored tracker is complete only after verified delivery. A failed push remains in progress/blocked and is reported accurately; local flags do not override a failed or unverified delivery.
+Acceptance: all required gates pass; documentation matches actual code; intended changes and final progress documents are committed locally; no unintended dirty files or runtime saves remain; all stage and overall flags are finished and the mirrored tracker is complete. A failed local commit or required verification remains in progress/blocked and is reported accurately. No Git push, GitHub authentication, or remote verification is necessary for completion.
 
 ## Execution Flags
 
-Update this table on disk as work proceeds. All flags are initially false because implementation has not started. The overall row summarizes the whole execution; it is not an additional stage.
+Update this table on disk as work proceeds. Flags began false before implementation; the saved values below are the current recovery checkpoint. The overall row summarizes the whole execution; it is not an additional stage.
 
 | Stage | Task | Started | Finished |
 | --- | --- | --- | --- |
-| Overall | Complete implementation and verified delivery | [ ] | [ ] |
-| 01 | Safe, reproducible tests | [ ] | [ ] |
-| 02 | Versioned, recoverable saves | [ ] | [ ] |
-| 03 | Validated commands, phase policy, bounded delivery | [ ] | [ ] |
-| 04 | Consistent inventory and transactions | [ ] | [ ] |
-| 05 | Validated central content catalog | [ ] | [ ] |
-| 06 | Deterministic, verified generation | [ ] | [ ] |
-| 07 | Shared combat and target policy | [ ] | [ ] |
-| 08 | Reliable events and audio | [ ] | [ ] |
-| 09 | Safe client state/input/responsive UI | [ ] | [ ] |
-| 10 | Visual/material/prop seams | [ ] | [ ] |
-| 11 | Interaction/objective/encounter seams | [ ] | [ ] |
-| 12 | World-kind and hub fixture | [ ] | [ ] |
-| 13 | Final verification, documentation, commit, push, completion | [ ] | [ ] |
+| Overall | Complete verified implementation and local commit | [x] | [x] |
+| 01 | Safe, reproducible tests | [x] | [x] |
+| 02 | Versioned, recoverable saves | [x] | [x] |
+| 03 | Validated commands, phase policy, bounded delivery | [x] | [x] |
+| 04 | Consistent inventory and transactions | [x] | [x] |
+| 05 | Validated central content catalog | [x] | [x] |
+| 06 | Deterministic, verified generation | [x] | [x] |
+| 07 | Shared combat and target policy | [x] | [x] |
+| 08 | Reliable events and audio | [x] | [x] |
+| 09 | Safe client state/input/responsive UI | [x] | [x] |
+| 10 | Visual/material/prop seams | [x] | [x] |
+| 11 | Interaction/objective/encounter seams | [x] | [x] |
+| 12 | World-kind and hub fixture | [x] | [x] |
+| 13 | Final verification, documentation, local commit, completion | [x] | [x] |

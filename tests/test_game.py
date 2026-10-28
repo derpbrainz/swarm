@@ -2,21 +2,24 @@
 Unit and integration tests for the Co-op Isometric Extraction Game.
 """
 
-try:
-    from fastapi.testclient import TestClient
-    from backend.app.main import app, room
-except ModuleNotFoundError:
-    TestClient = None
-    from backend.app.engine.game_loop import GameRoom
-    app = None
-    room = GameRoom()
+import asyncio
+import pytest
+from fastapi.testclient import TestClient
+from backend.app.main import create_app
 from backend.app.engine.map_builder import build_mission_map, verify_level_solvability
-from backend.app.engine.level_store import level_store
 from backend.app.engine.physics import (
     circle_vs_aabb,
     has_line_of_sight,
     move_with_collisions,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_game(game_room):
+    global room, level_store, shared_stash
+    room = game_room
+    level_store = room.level_store
+    shared_stash = room.shared_stash
 
 
 def _reset_room():
@@ -62,6 +65,9 @@ def test_wfc_multi_size_segments_and_connectors():
 
 def test_level_persistence_and_testing_phase():
     _reset_room()
+    for existing in level_store.levels.values():
+        if existing["mission_id"] == "outpost":
+            existing["tested"] = True
 
     rec = level_store.generate_level("outpost", seed=777, tested=False)
     assert rec["tested"] is False
@@ -179,6 +185,7 @@ def test_lobby_leader_and_gameplay_flow():
     assert room.select_mission("p2", "reactor") is False
     assert room.select_mission("p1", "reactor") is True
     assert room.selected_mission_id == "reactor"
+    level_store.mark_completed("biolab_202")
 
     # Character selection
     assert room.select_class("p1", "recon") is True
@@ -208,14 +215,19 @@ def test_lobby_leader_and_gameplay_flow():
 
 
 def test_websocket_and_http_endpoints():
-    if TestClient is None or app is None:
-        return
     room.players.clear()
     room.join_order.clear()
     room.leader_id = None
     room.reset_to_lobby()
 
-    client = TestClient(app)
+    async def controlled_simulation(room, clients):
+        await asyncio.Event().wait()
+
+    with TestClient(create_app(room, simulation=controlled_simulation)) as client:
+        _check_websocket_and_http(client)
+
+
+def _check_websocket_and_http(client):
     res = client.get("/api/config")
     assert res.status_code == 200
     data = res.json()
@@ -276,7 +288,6 @@ def test_enemy_hearing_and_sight_ai():
 
 def test_inventory_crates_body_chest_shared_stash_and_ready():
     from backend.app.config.items import make_item
-    from backend.app.engine.inventory import shared_stash
 
     _reset_room()
 
@@ -311,6 +322,8 @@ def test_inventory_crates_body_chest_shared_stash_and_ready():
     assert p2["inventory"]["equipped"]["primary_weapon"] is not None
     assert p2["inventory"]["equipped"]["secondary_weapon"] is not None
     assert p2["inventory"]["equipped"]["quick_use"] is not None
+    # Body chests preserve nonstarter gear only; free loadouts are nonbankable.
+    assert room.stash_to_player("p2", "medkit")["ok"] is True
 
     # Preparation & Ready system: leader prepares mission, all players ready up -> 5s countdown -> launch
     room.select_mission("p1", "outpost_101")
@@ -404,7 +417,6 @@ def test_inventory_crates_body_chest_shared_stash_and_ready():
 
 
 def test_prep_screen_countdown_and_level_items():
-    from backend.app.engine.inventory import shared_stash
 
     _reset_room()
     # Every persisted combat level has ground items and supply crates
@@ -533,4 +545,3 @@ def test_sprint_mechanic_and_noise_and_enemy_sight():
     assert len(room.projectiles) > 0  # Pistol CAN fire while sprinting!
 
     _reset_room()
-

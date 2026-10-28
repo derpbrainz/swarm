@@ -1,0 +1,44 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SWARM_SAVE_DIR: ${{ runner.temp }}/swarm-saves
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install Python dependencies
+        run: python3 -m pip install -e '.[test]'
+      - name: Install frontend test dependencies
+        run: npm ci
+      - name: Install Google Chrome and system dependencies
+        run: npx playwright install --with-deps chrome
+      - name: Validate authored content
+        run: python3 -m backend.app.content
+      - name: Python tests with temporary stores
+        run: python3 -m pytest -q
+      - name: Native frontend unit tests
+        run: npm test
+      - name: Chrome tests with disposable server and stores
+        run: npm run test:browser
+      - name: Check legacy save fixtures were not modified
+        if: always()
+        run: git diff --exit-code -- backend/app/data/levels.json backend/app/data/shared_stash.json
+      - name: Check whitespace
+        run: git diff --check

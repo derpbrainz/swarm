@@ -115,3 +115,12 @@ export function computeVisibilityPolygon(ox, oy, maxDist, walls, rayCount = 96) 
   }
   return pts;
 }
+
+export function pointInPolygon(x, y, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i], b = polygon[j];
+    if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}

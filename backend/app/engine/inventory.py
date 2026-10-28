@@ -1,68 +1,94 @@
 from __future__ import annotations
 
-import json
+import copy
 import uuid
 from pathlib import Path
 from typing import Any
 
 from backend.app.config.items import CLASS_CARRY_CAPACITY, CLASS_MIN_LOADOUT, ITEM_TEMPLATES, make_item
+from backend.app.content import mutable_copy
+from backend.app.engine.persistence import SaveError, read_json, read_snapshot, runtime_directory, write_snapshot
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "shared_stash.json"
-
-DEFAULT_STASH_STACKS = {
-    "medkit": 4,
-    "stim_injector": 3,
-    "ammo_pack": 5,
-    "heavy_ammo": 2,
-    "tactical_light": 2,
-    "portable_turret": 2,
-    "sonar_beacon": 2,
-    "plasma_lmg": 1,
-    "rail_carbine": 1,
-    "machine_pistol": 2,
-    "flare_revolver": 2,
-    "service_pistol": 2,
-}
-
 
 class SharedStash:
     """Server-persisted shared inventory where multiple copies of the same item stack."""
 
-    def __init__(self, path: Path | None = None) -> None:
-        self.path = path or DATA_PATH
+    def __init__(self, path: Path | None = None, *, load: bool = True) -> None:
+        self.path = Path(path) if path is not None else runtime_directory() / "shared_stash.json"
         self.stacks: dict[str, int] = {}
-        self.load()
+        self.holdings: dict[str, dict[str, str]] = {}
+        self.loaded = False
+        if load:
+            self.load()
 
     def load(self) -> None:
-        if self.path.exists():
-            try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    self.stacks = {k: int(v) for k, v in data.items() if int(v) > 0 and k in ITEM_TEMPLATES}
-                    return
-            except (OSError, json.JSONDecodeError, ValueError):
-                pass
-        self.stacks = dict(DEFAULT_STASH_STACKS)
-        self.save()
+        source = self.path if self.path.exists() else DATA_PATH
+        data = read_snapshot(source, "shared_stash")
+        for identity, count in data.items():
+            if not isinstance(identity, str) or type(count) is not int or count < 0:
+                raise SaveError(f"{source}: invalid count for {identity!r}; original retained")
+        envelope = read_json(source)
+        holdings = envelope.get("holdings", {}) if "schema_version" in envelope else {}
+        if not isinstance(holdings, dict) or any(
+            not isinstance(identity, str) or not isinstance(record, dict)
+            or not isinstance(record.get("template_id"), str) or not isinstance(record.get("owner"), str)
+            for identity, record in holdings.items()
+        ):
+            raise SaveError(f"{source}: invalid holdings; original retained")
+        # No permanent accounts: a new server refunds abandoned player/world claims once.
+        recovered = dict(data)
+        for record in holdings.values():
+            tid = record["template_id"]
+            recovered[tid] = recovered.get(tid, 0) + 1
+        if holdings or not self.path.exists():
+            write_snapshot(self.path, "shared_stash", recovered, metadata={"holdings": {}})
+        self.stacks = recovered
+        self.holdings = {}
+        self.loaded = True
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.stacks, indent=2), encoding="utf-8")
+        write_snapshot(self.path, "shared_stash", self.stacks, metadata={"holdings": self.holdings})
+
+    def commit(self, stacks: dict, holdings: dict) -> None:
+        write_snapshot(self.path, "shared_stash", stacks, metadata={"holdings": holdings})
+        self.stacks, self.holdings = stacks, holdings
+
+    def commit_player(self, before: dict, after: dict, *, stacks: dict | None = None, world_items=()) -> None:
+        holdings = copy.deepcopy(self.holdings)
+        for item in inventory_items(before):
+            holdings.pop(item["id"], None)
+        for item in inventory_items(after):
+            if bankable(item):
+                holdings[item["id"]] = {"template_id": item["template_id"], "owner": f"player:{after['id']}"}
+        for item in world_items:
+            if bankable(item):
+                holdings[item["id"]] = {"template_id": item["template_id"], "owner": "world"}
+        counts = dict(self.stacks) if stacks is None else stacks
+        if counts != self.stacks or holdings != self.holdings:
+            self.commit(counts, holdings)
 
     def add_template(self, template_id: str, count: int = 1) -> None:
-        if template_id not in ITEM_TEMPLATES or count <= 0:
-            return
-        self.stacks[template_id] = self.stacks.get(template_id, 0) + count
-        self.save()
+        if template_id not in ITEM_TEMPLATES or type(count) is not int or count <= 0:
+            raise ValueError("Invalid stash template/count")
+        stacks = dict(self.stacks)
+        stacks[template_id] = stacks.get(template_id, 0) + count
+        self.commit(stacks, copy.deepcopy(self.holdings))
 
     def take_template(self, template_id: str) -> dict | None:
+        if template_id not in ITEM_TEMPLATES:
+            raise ValueError("Unknown item template")
         if self.stacks.get(template_id, 0) <= 0:
             return None
-        self.stacks[template_id] -= 1
-        if self.stacks[template_id] <= 0:
-            self.stacks.pop(template_id, None)
-        self.save()
-        return make_item(template_id)
+        item = make_item(template_id)
+        stacks = dict(self.stacks)
+        stacks[template_id] -= 1
+        if not stacks[template_id]:
+            stacks.pop(template_id)
+        holdings = copy.deepcopy(self.holdings)
+        holdings[item["id"]] = {"template_id": template_id, "owner": "withdrawal"}
+        self.commit(stacks, holdings)
+        return item
 
     def get_stacked_list(self) -> list[dict]:
         out = []
@@ -86,10 +112,47 @@ def _starter(item: dict) -> dict:
     return item
 
 
+def inventory_items(player: dict) -> list[dict]:
+    inv = player.get("inventory") or {}
+    return list(inv.get("storage", [])) + [item for item in inv.get("equipped", {}).values() if item]
+
+
+def bankable(item: dict) -> bool:
+    return not item.get("starter", False)
+
+
+def active_weapon_item(player: dict) -> dict | None:
+    inv = player.get("inventory") or {}
+    item = inv.get("equipped", {}).get(inv.get("active_weapon_slot", "primary_weapon"))
+    return item if item and "weapon" in item else None
+
+
+def sync_weapon_state(player: dict) -> None:
+    # Player ammo remains a compatibility mirror for existing callers/test fixtures.
+    previous_id = player.get("_weapon_mirror_id")
+    mirror = (player.get("ammo", 0), player.get("reload_timer", 0.0))
+    if previous_id and mirror != player.get("_weapon_mirror_values"):
+        previous = next((it for it in inventory_items(player) if it["id"] == previous_id), None)
+        if previous and "weapon" in previous:
+            previous["weapon_state"] = {"ammo": max(0, min(int(mirror[0]), int(previous["weapon"]["mag_size"]))), "reload_timer": max(0.0, float(mirror[1]))}
+    item = active_weapon_item(player)
+    if item:
+        maximum = int(item["weapon"]["mag_size"])
+        state = item.setdefault("weapon_state", {"ammo": maximum, "reload_timer": 0.0})
+        player["max_ammo"] = maximum
+        player["ammo"] = state["ammo"]
+        player["reload_timer"] = state["reload_timer"]
+    else:
+        player["ammo"] = player["max_ammo"] = 0
+        player["reload_timer"] = 0.0
+    player["_weapon_mirror_id"] = item["id"] if item else None
+    player["_weapon_mirror_values"] = (player["ammo"], player["reload_timer"])
+
+
 def build_player_inventory(class_id: str) -> dict[str, Any]:
-    loadout = CLASS_MIN_LOADOUT.get(class_id, CLASS_MIN_LOADOUT["vanguard"])
-    max_wt = CLASS_CARRY_CAPACITY.get(class_id, 15)
-    storage = [_starter(make_item(loadout["storage"])), _starter(make_item("medkit"))]
+    loadout = CLASS_MIN_LOADOUT[class_id]
+    max_wt = CLASS_CARRY_CAPACITY[class_id]
+    storage = [_starter(make_item(tid)) for tid in loadout["storage"]]
     cur_wt = sum(int(i.get("weight", 1)) for i in storage)
     return {
         "equipped": {
@@ -106,108 +169,95 @@ def build_player_inventory(class_id: str) -> dict[str, Any]:
 
 
 def get_active_weapon_config(player: dict[str, Any], default_weapon: dict[str, Any]) -> dict[str, Any]:
-    inv = player.get("inventory")
-    if not inv:
-        return default_weapon
-    slot = inv.get("active_weapon_slot", "primary_weapon")
-    item = inv["equipped"].get(slot) or inv["equipped"].get("primary_weapon") or inv["equipped"].get("secondary_weapon")
-    if item and "weapon" in item:
-        cfg = dict(item["weapon"])
+    item = active_weapon_item(player)
+    if item:
+        cfg = copy.deepcopy(item["weapon"])
+        definition = ITEM_TEMPLATES[item["template_id"]]["weapon"]
+        for key in ("fire_sound", "reload_sound", "can_fire_while_running"):
+            cfg[key] = definition[key]
         cfg["name"] = item.get("name", default_weapon.get("name", ""))
         cfg["template_id"] = item.get("template_id", "")
         return cfg
-    return default_weapon
+    return {}
 
 
 def is_light_weapon(player: dict[str, Any], default_weapon: dict[str, Any] | None = None) -> bool:
-    """Returns True if the active equipped weapon is a light sidearm (e.g. pistol, revolver)."""
-    inv = player.get("inventory")
-    if not inv:
-        return True
-    slot = inv.get("active_weapon_slot", "primary_weapon")
-    if slot == "secondary_weapon":
-        return True
-    item = inv.get("equipped", {}).get(slot)
-    if not item:
-        cfg = default_weapon or {}
-        name = cfg.get("name", "").lower()
-        tid = cfg.get("template_id", "").lower()
-        return "pistol" in name or "revolver" in name or "pistol" in tid or "revolver" in tid
-    w_name = item.get("name", "").lower()
-    t_id = item.get("template_id", "").lower()
-    cat = item.get("category", "")
-    return (
-        cat == "secondary_weapon"
-        or "pistol" in w_name
-        or "revolver" in w_name
-        or "pistol" in t_id
-        or "revolver" in t_id
-        or int(item.get("weight", 99)) <= 3
-    )
+    item = active_weapon_item(player)
+    return bool(item and ITEM_TEMPLATES[item["template_id"]]["weapon"]["can_fire_while_running"])
 
 
-def has_tactical_light(player: dict[str, Any]) -> bool:
-    inv = player.get("inventory")
-    if not inv:
-        return False
-    qu = inv["equipped"].get("quick_use")
-    if qu and qu.get("template_id") == "tactical_light":
-        return True
-    return any(i.get("template_id") == "tactical_light" for i in inv.get("storage", []))
+def item_effect(item: dict) -> dict:
+    """Legacy expanded values survive; new effect tuning comes from stable references."""
+    effect = mutable_copy(ITEM_TEMPLATES[item["template_id"]].get("effect", {}))
+    legacy = item.get("value")
+    if isinstance(legacy, dict):
+        for key in ("heal", "sight_boost", "loot"):
+            if key in legacy:
+                effect[key] = legacy[key]
+    return effect
+
+
+def sight_boost(player: dict) -> float:
+    inv = player.get("inventory") or {}
+    items = list(inv.get("storage", [])) + [inv.get("equipped", {}).get("quick_use")]
+    return max((float(item_effect(it).get("sight_boost", 0)) for it in items if it), default=0.0)
 
 
 def recalc_inventory(player: dict[str, Any]) -> None:
     inv = player.get("inventory")
     if not inv:
         return
-    inv["max_weight"] = CLASS_CARRY_CAPACITY.get(player.get("class_id", "vanguard"), 15)
+    inv["max_weight"] = CLASS_CARRY_CAPACITY[player["class_id"]]
     inv["current_weight"] = sum(int(i.get("weight", 1)) for i in inv.get("storage", []))
-    slot = inv.get("active_weapon_slot", "primary_weapon")
-    w_item = inv["equipped"].get(slot) or inv["equipped"].get("primary_weapon") or inv["equipped"].get("secondary_weapon")
-    if w_item and "weapon" in w_item:
-        mag = int(w_item["weapon"]["mag_size"])
-        player["max_ammo"] = mag
-        player["ammo"] = min(player.get("ammo", mag), mag)
+    sync_weapon_state(player)
 
 
 def apply_min_loadout(player: dict[str, Any]) -> None:
     player["inventory"] = build_player_inventory(player.get("class_id", "vanguard"))
     recalc_inventory(player)
-    player["ammo"] = player["max_ammo"]
 
 
 def add_item_to_player(player: dict[str, Any], item: dict[str, Any], target_slot: str | None = None) -> tuple[bool, str]:
     inv = player.get("inventory")
     if not inv:
-        apply_min_loadout(player)
-        inv = player["inventory"]
+        return False, "No inventory"
 
-    recalc_inventory(player)
     cat = item.get("category", "storage")
     valid_slots = ("primary_weapon", "secondary_weapon", "special_ability", "quick_use")
+    if item.get("template_id") not in ITEM_TEMPLATES:
+        return False, "Unknown item template"
+    if target_slot is not None and (target_slot not in valid_slots or cat != target_slot):
+        return False, "Item cannot be equipped in that slot"
+    if any(it["id"] == item["id"] for it in inventory_items(player)):
+        return False, "Item already owned"
+    current_weight = sum(int(it.get("weight", 1)) for it in inv.get("storage", []))
+    maximum = CLASS_CARRY_CAPACITY[player["class_id"]]
 
     if target_slot in valid_slots and cat == target_slot:
         prev = inv["equipped"].get(target_slot)
+        if current_weight + (int(prev.get("weight", 1)) if prev else 0) > maximum:
+            return False, "Not enough storage capacity to swap equipped item"
+        sync_weapon_state(player)
         if prev is not None:
-            if inv["current_weight"] + int(prev.get("weight", 1)) > inv["max_weight"]:
-                return False, "Not enough storage capacity to swap equipped item"
             inv["storage"].append(prev)
-        inv["equipped"][target_slot] = item
+        inv["equipped"][target_slot] = copy.deepcopy(item)
         recalc_inventory(player)
-        if target_slot == inv.get("active_weapon_slot"):
-            player["ammo"] = player["max_ammo"]
         return True, f"Equipped {item['name']}"
 
     if target_slot is None and cat in valid_slots and inv["equipped"].get(cat) is None:
-        inv["equipped"][cat] = item
+        if current_weight > maximum:
+            return False, "Storage capacity exceeded"
+        sync_weapon_state(player)
+        inv["equipped"][cat] = copy.deepcopy(item)
         recalc_inventory(player)
         return True, f"Equipped {item['name']}"
 
     wt = int(item.get("weight", 1))
-    if inv["current_weight"] + wt > inv["max_weight"]:
-        return False, f"Too heavy! Requires {wt} wt ({inv['current_weight']}/{inv['max_weight']} wt used)"
+    if current_weight + wt > maximum:
+        return False, f"Too heavy! Requires {wt} wt ({current_weight}/{maximum} wt used)"
 
-    inv["storage"].append(item)
+    sync_weapon_state(player)
+    inv["storage"].append(copy.deepcopy(item))
     recalc_inventory(player)
     return True, f"Stored {item['name']} ({wt} wt)"
 
@@ -216,6 +266,9 @@ def remove_item_from_player(player: dict[str, Any], item_id: str) -> dict[str, A
     inv = player.get("inventory")
     if not inv:
         return None
+    if not any(item.get("id") == item_id for item in inventory_items(player)):
+        return None
+    sync_weapon_state(player)
     for i, item in enumerate(inv["storage"]):
         if item.get("id") == item_id:
             removed = inv["storage"].pop(i)
@@ -237,17 +290,21 @@ def equip_item_from_storage(player: dict[str, Any], item_id: str, target_slot: s
     if idx is None:
         return False, "Item not in storage"
     item = inv["storage"][idx]
+    if item.get("template_id") not in ITEM_TEMPLATES:
+        return False, "Unknown item template"
     slot = target_slot or item.get("category")
     if slot not in ("primary_weapon", "secondary_weapon", "special_ability", "quick_use") or item.get("category") != slot:
         return False, "Item cannot be equipped in that slot"
     prev = inv["equipped"].get(slot)
+    resulting_weight = sum(int(it.get("weight", 1)) for it in inv["storage"]) - int(item.get("weight", 1)) + (int(prev.get("weight", 1)) if prev else 0)
+    if resulting_weight > CLASS_CARRY_CAPACITY[player["class_id"]]:
+        return False, "Not enough storage capacity to swap equipped item"
+    sync_weapon_state(player)
     inv["storage"].pop(idx)
     if prev is not None:
         inv["storage"].append(prev)
     inv["equipped"][slot] = item
     recalc_inventory(player)
-    if slot == inv.get("active_weapon_slot"):
-        player["ammo"] = player["max_ammo"]
     return True, f"Equipped {item['name']}"
 
 
@@ -258,10 +315,10 @@ def unequip_slot_to_storage(player: dict[str, Any], slot: str) -> tuple[bool, st
     item = inv["equipped"].get(slot)
     if not item:
         return False, "Slot is empty"
-    recalc_inventory(player)
     wt = int(item.get("weight", 1))
-    if inv["current_weight"] + wt > inv["max_weight"]:
+    if sum(int(it.get("weight", 1)) for it in inv["storage"]) + wt > CLASS_CARRY_CAPACITY[player["class_id"]]:
         return False, "Storage full (cannot unequip)"
+    sync_weapon_state(player)
     inv["equipped"][slot] = None
     inv["storage"].append(item)
     recalc_inventory(player)
@@ -272,18 +329,20 @@ def create_body_chest_from_player(player: dict[str, Any]) -> dict[str, Any] | No
     inv = player.get("inventory")
     if not inv:
         return None
+    sync_weapon_state(player)
     items: list[dict[str, Any]] = []
     for slot in ("primary_weapon", "secondary_weapon", "special_ability", "quick_use"):
         if inv["equipped"].get(slot):
-            items.append(inv["equipped"][slot])
+            if bankable(inv["equipped"][slot]):
+                items.append(inv["equipped"][slot])
             inv["equipped"][slot] = None
-    items.extend(inv.get("storage", []))
+    items.extend(item for item in inv.get("storage", []) if bankable(item))
     inv["storage"] = []
     recalc_inventory(player)
     if not items:
         return None
     return {
-        "id": f"body_{player['id']}_{uuid.uuid4().hex[:4]}",
+        "id": f"body_{player['id']}_{uuid.uuid4().hex}",
         "type": "body_chest",
         "name": f"{player['name']}'s Body Chest",
         "x": round(float(player["x"]), 2),
@@ -297,38 +356,44 @@ def create_body_chest_from_player(player: dict[str, Any]) -> dict[str, Any] | No
 
 def return_non_starter_items(player: dict[str, Any], stash: "SharedStash") -> int:
     """Returns every non-starter item a player carries back to the shared stash."""
-    inv = player.get("inventory")
-    if not inv:
-        return 0
+    return deposit_extracted_loot(player, stash, all_items=True)
+
+
+def deposit_extracted_loot(player: dict[str, Any], stash: SharedStash, *, all_items=False) -> int:
+    staged = copy.deepcopy(player)
+    items = inventory_items(staged) if all_items else list((staged.get("inventory") or {}).get("storage", []))
+    deposited = [item for item in items if bankable(item)]
+    stacks = dict(stash.stacks)
+    for item in deposited:
+        if item.get("template_id") not in ITEM_TEMPLATES:
+            raise ValueError("Unknown item template")
+        stacks[item["template_id"]] = stacks.get(item["template_id"], 0) + 1
+        remove_item_from_player(staged, item["id"])
+    stash.commit_player(player, staged, stacks=stacks)
+    player.update(staged)
+    return len(deposited)
+
+
+def deposit_squad_loot(players: list[dict], stash: SharedStash) -> int:
+    staged = [copy.deepcopy(player) for player in players]
+    stacks, holdings = dict(stash.stacks), copy.deepcopy(stash.holdings)
     count = 0
-    items = list(inv.get("storage", [])) + [it for it in inv.get("equipped", {}).values() if it]
-    for item in items:
-        if item.get("starter") or item.get("category") == "special_ability":
-            continue
-        tid = item.get("template_id") or item.get("item_type")
-        if tid:
-            stash.add_template(tid, 1)
-            count += 1
+    for before, after in zip(players, staged):
+        for item in inventory_items(before):
+            holdings.pop(item["id"], None)
+        for item in list(after["inventory"]["storage"]):
+            if bankable(item):
+                tid = item["template_id"]
+                if tid not in ITEM_TEMPLATES:
+                    raise ValueError("Unknown item template")
+                stacks[tid] = stacks.get(tid, 0) + 1
+                remove_item_from_player(after, item["id"])
+                count += 1
+        for item in inventory_items(after):
+            if bankable(item):
+                holdings[item["id"]] = {"template_id": item["template_id"], "owner": f"player:{after['id']}"}
+    if stacks != stash.stacks or holdings != stash.holdings:
+        stash.commit(stacks, holdings)
+    for before, after in zip(players, staged):
+        before.update(after)
     return count
-
-
-def deposit_extracted_loot(player: dict[str, Any], stash: SharedStash) -> int:
-    inv = player.get("inventory")
-    if not inv:
-        return 0
-    count = 0
-    keep: list[dict[str, Any]] = []
-    for item in list(inv.get("storage", [])):
-        if item.get("starter"):
-            keep.append(item)
-            continue
-        tid = item.get("template_id") or item.get("item_type")
-        if tid:
-            stash.add_template(tid, 1)
-            count += 1
-    inv["storage"] = keep
-    recalc_inventory(player)
-    return count
-
-
-shared_stash = SharedStash()

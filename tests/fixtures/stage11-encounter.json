@@ -1,0 +1,21 @@
+{
+  "puzzles": {
+    "fixture_timed": {"handler": "timed_input", "duration": 2, "input": "ACK", "allow_tech_bypass": false},
+    "fixture_power": {"handler": "power_reroute", "node_count": 2, "allow_tech_bypass": true},
+    "fixture_signal": {"handler": "signal_decrypt", "sequence_length": 2, "symbols": ["YES", "NO"], "allow_tech_bypass": true}
+  },
+  "attacks": {
+    "fixture_claw": {"handler": "melee", "range": 1.5, "damage": 10, "cooldown": 0.5},
+    "fixture_acid": {"handler": "projectile", "range": 8, "damage": 7, "cooldown": 0.75, "projectile_speed": 9},
+    "fixture_heavy_claw": {"handler": "melee", "range": 2, "damage": 20, "cooldown": 0.25}
+  },
+  "encounters": {
+    "fixture_phases": {"phases": [
+      {"id": "guard", "health_at_most": 1, "attacks": ["fixture_claw", "fixture_acid"]},
+      {"id": "enraged", "health_at_most": 0.5, "attacks": ["fixture_heavy_claw", "fixture_acid"]}
+    ]}
+  },
+  "enemies": {
+    "fixture_boss": {"id": "fixture_boss", "faction": "swarm", "name": "Encounter fixture", "color": "#B03A2E", "max_hp": 100, "speed": 4, "patrol_speed": 2, "radius": 1.1, "sight_range": 12, "sight_angle": 6.283185, "hearing_multiplier": 1, "attacks": ["fixture_claw", "fixture_acid"], "encounter_id": "fixture_phases"}
+  }
+}

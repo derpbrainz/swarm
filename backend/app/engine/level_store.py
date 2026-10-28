@@ -1,50 +1,63 @@
 from __future__ import annotations
 
 import copy
-import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.app.engine.map_builder import build_mission_map
+from backend.app.config.items import ITEM_TEMPLATES
+from backend.app.content import CATALOG, mutable_copy
+from backend.app.engine.map_builder import build_mission_map, validate_generated_map
+from backend.app.engine.wfc import GENERATOR_VERSION
+from backend.app.engine.puzzles import runtime_puzzle
+from backend.app.config.missions import MISSIONS
+from backend.app.engine.persistence import SaveError, read_snapshot, runtime_directory, write_snapshot
 
 DATA_FILE = Path(__file__).resolve().parents[1] / "data" / "levels.json"
 
 
 class LevelStore:
-    def __init__(self, data_file: Path = DATA_FILE):
-        self.data_file = Path(data_file)
+    def __init__(self, data_file: Path | None = None, *, load: bool = True):
+        self.data_file = Path(data_file) if data_file is not None else runtime_directory() / "levels.json"
         self.levels = {}
+        self.loaded = False
+        if load:
+            self.load()
 
-        if self.data_file.exists():
-            try:
-                loaded = json.loads(self.data_file.read_text(encoding="utf-8"))
-                # Auto-upgrade persisted levels if their loot/crate schema is outdated
-                outdated = False
-                for rec in loaded.values():
-                    mt = rec.get("map_template", {})
-                    lt_list = mt.get("loot", [])
-                    if len(lt_list) < 5 or not mt.get("crates") or (lt_list and "type" not in lt_list[0]):
-                        outdated = True
-                        break
-                if not outdated:
-                    self.levels = loaded
-            except Exception:
-                self.levels = {}
-
-        if not self.levels:
-            for mission_id, seed in (
-                ("outpost", 101),
-                ("outpost", 154),
-                ("biolab", 202),
-                ("biolab", 255),
-                ("reactor", 303),
-            ):
-                self.generate_level(mission_id, seed, tested=True)
+    def load(self) -> None:
+        source = self.data_file if self.data_file.exists() else DATA_FILE
+        records = copy.deepcopy(read_snapshot(source, "levels"))
+        for level_id, record in records.items():
+            if not isinstance(record, dict) or record.get("level_id") != level_id:
+                raise SaveError(f"{source}: invalid level record {level_id!r}; original retained")
+            if record.get("mission_id") not in MISSIONS or type(record.get("seed")) is not int:
+                raise SaveError(f"{source}: invalid mission/seed in {level_id}; original retained")
+            template = record.get("map_template")
+            required = {"segments", "walls", "puzzles", "enemies", "player_spawn_points", "spaceship", "extraction_zone"}
+            if not isinstance(template, dict) or not required.issubset(template):
+                raise SaveError(f"{source}: incomplete map in {level_id}; explicit repair required")
+            for flag in ("tested", "completed"):
+                record.setdefault(flag, False)
+                if type(record[flag]) is not bool:
+                    raise SaveError(f"{source}: invalid {flag} in {level_id}")
+            template.setdefault("loot", [])
+            template.setdefault("crates", [])
+            for item in template["loot"]:
+                if "type" not in item:
+                    identity = item.get("template_id") or item.get("item_type")
+                    if not identity:
+                        raise SaveError(f"{source}: missing item type in {level_id}")
+                    item["type"] = identity
+            record["segment_count"] = len(template["segments"])
+            record["connector_count"] = len(template.get("connectors", []))
+            record.setdefault("status", "verified" if record["tested"] else "testing")
+        self.levels = records
+        self.loaded = True
+        if not self.data_file.exists():
             self.save()
 
     def save(self) -> None:
-        self.data_file.parent.mkdir(parents=True, exist_ok=True)
-        self.data_file.write_text(json.dumps(self.levels, indent=2), encoding="utf-8")
+        write_snapshot(self.data_file, "levels", self.levels)
 
     def _level_id(self, mission_id: str, seed: int) -> str:
         base = f"{mission_id}_{seed}"
@@ -58,9 +71,10 @@ class LevelStore:
     def generate_level(self, mission_id: str, seed: int | None = None, tested: bool = False) -> dict:
         from backend.app.config.missions import MISSIONS
 
-        mission_cfg = MISSIONS.get(mission_id, MISSIONS["outpost"])
+        mission_cfg = MISSIONS[mission_id]
         actual_seed = int(seed) if seed is not None else (100 + (len(self.levels) + 1) * 53)
         map_template = build_mission_map(mission_id, seed=actual_seed, test_mode=False)
+        validate_generated_map(map_template)
         level_id = self._level_id(mission_id, actual_seed)
         same_mission_count = sum(1 for r in self.levels.values() if r.get("mission_id") == mission_id) + 1
 
@@ -70,6 +84,13 @@ class LevelStore:
             "name": f"{mission_cfg['name']} #{same_mission_count}",
             "difficulty": mission_cfg.get("difficulty", "Standard"),
             "seed": actual_seed,
+            "requested_seed": actual_seed,
+            "resolved_seed": map_template["resolved_seed"],
+            "generator_version": map_template["generator_version"],
+            "content_version": map_template["content_version"],
+            "geometry_validated": True,
+            "generation_attempts": map_template["generation_attempts"],
+            "generation_diagnostics": copy.deepcopy(map_template["generation_diagnostics"]),
             "tested": bool(tested),
             "completed": False,
             "status": "verified" if tested else "testing",
@@ -80,7 +101,11 @@ class LevelStore:
         }
 
         self.levels[level_id] = record
-        self.save()
+        try:
+            self.save()
+        except SaveError:
+            self.levels.pop(level_id)
+            raise
         return record
 
     def is_mission_unlocked(self, mission_id: str) -> tuple[bool, str | None]:
@@ -89,11 +114,11 @@ class LevelStore:
         m_cfg = MISSIONS.get(mission_id)
         if not m_cfg:
             return False, "Unknown mission"
-        prereq = m_cfg.get("prerequisite_mission")
+        prereq = m_cfg["prerequisites"]
         if not prereq:
             return True, None
         has_completed_easier = any(
-            r.get("mission_id") in ("outpost", "biolab") and r.get("completed", False)
+            r.get("mission_id") in prereq and r.get("completed", False)
             for r in self.levels.values()
         )
         if not has_completed_easier:
@@ -114,7 +139,7 @@ class LevelStore:
             for idx, item in enumerate(same_mission):
                 if item["level_id"] == rec["level_id"] and idx > 0:
                     prev = same_mission[idx - 1]
-                    if rec["mission_id"] == "outpost":
+                    if MISSIONS[rec["mission_id"]]["previous_level_accepts_tested"]:
                         if not prev.get("tested", False) and not prev.get("completed", False):
                             return False, f"Complete '{prev['name']}' testing phase first to unlock {rec['name']}"
                     else:
@@ -169,13 +194,35 @@ class LevelStore:
     def instantiate_map(self, level_or_mission_id: str, force_test_mode: bool | None = None) -> dict:
         record = self.get_level_record(level_or_mission_id)
         map_copy = copy.deepcopy(record.get("map_template", {}))
-        if not map_copy.get("crates") or len(map_copy.get("loot", [])) < 15:
-            map_copy = build_mission_map(record["mission_id"], seed=record.get("seed", 101), test_mode=False)
-            record["map_template"] = copy.deepcopy(map_copy)
-            self.save()
-        for lt in map_copy.get("loot", []):
-            if "type" not in lt:
-                lt["type"] = lt.get("template_id") or lt.get("item_type") or "credits"
+        # Legacy snapshots are deliberately not reclassified/repaired at mission start.
+        version = record.get("generator_version", map_copy.get("generator_version"))
+        content_version = record.get("content_version", map_copy.get("content_version"))
+        if version == GENERATOR_VERSION and content_version == CATALOG.definitions["content_version"]:
+            validate_generated_map(map_copy)
+        world_id = uuid.uuid4().hex
+        map_copy["world_id"] = world_id
+        map_copy["world_kind"] = "mission"
+        map_copy["world_name"] = map_copy["mission_name"]
+        map_copy["capabilities"] = mutable_copy(CATALOG.definitions["world_rules"]["mission"])
+        map_copy["geometry_revision"] = 0
+        # Retained layouts already carry explicit types/references; never infer from names.
+        door_ids = {p.get("door_id") for p in map_copy.get("puzzles", [])}
+        door_ids.add(map_copy.get("spaceship", {}).get("door_wall_id"))
+        for wall in map_copy.get("walls", []):
+            wall.setdefault("is_door", wall.get("type") in ("door", "ship_ramp") or wall.get("id") in door_ids)
+            wall.setdefault("material", "door" if wall["is_door"] else "solid")
+        for item in map_copy.get("loot", []) + [it for cr in map_copy.get("crates", []) for it in cr.get("items", [])]:
+            identity = item.get("template_id") or item.get("item_type") or item.get("type")
+            if identity not in ITEM_TEMPLATES:
+                raise ValueError(f"Unknown item template in {record['level_id']}: {identity}")
+            item["spawn_id"] = item.get("id")
+            item["world_id"] = world_id
+            item["id"] = f"{world_id}_{uuid.uuid4().hex}"
+            item["type"] = item["template_id"] = item["item_type"] = identity
+            if "weapon" in item:
+                item.setdefault("weapon_state", {"ammo": int(item["weapon"]["mag_size"]), "reload_timer": 0.0})
+        for puzzle in map_copy.get("puzzles", []) + [c["puzzle"] for c in map_copy.get("crates", []) if c.get("puzzle")]:
+            runtime_puzzle(puzzle)
 
         is_test = force_test_mode if force_test_mode is not None else (not record["tested"])
 
@@ -185,6 +232,9 @@ class LevelStore:
         map_copy["test_mode"] = bool(is_test)
 
         if is_test:
+            # Combat requirements are explicitly skipped only for real removed spawns.
+            # Keep their identity for objective validation, never invent unknown targets.
+            map_copy["testing_enemy_ids"] = [enemy["id"] for enemy in map_copy.get("enemies", [])]
             map_copy["enemies"] = []
 
         return map_copy
@@ -194,9 +244,7 @@ class LevelStore:
         if not record:
             return False
 
-        record["tested"] = True
-        record["status"] = "verified"
-        self.save()
+        self._update_progress(record, tested=True, status="verified")
         return True
 
     def mark_completed(self, level_id: str) -> bool:
@@ -204,11 +252,14 @@ class LevelStore:
         if not record:
             return False
 
-        record["tested"] = True
-        record["completed"] = True
-        record["status"] = "verified"
-        self.save()
+        self._update_progress(record, tested=True, completed=True, status="verified")
         return True
 
-
-level_store = LevelStore()
+    def _update_progress(self, record, **changes):
+        previous = {key: record[key] for key in changes}
+        record.update(changes)
+        try:
+            self.save()
+        except SaveError:
+            record.update(previous)
+            raise

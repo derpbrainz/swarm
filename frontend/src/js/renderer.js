@@ -3,13 +3,17 @@
  * 3D-extruded walls/doors, Spaceship drop bay, sight cones, and sound rings.
  */
 
-import { TILE_W, TILE_H, WALL_HEIGHT_PX, worldToIso, computeVisibilityPolygon } from './iso.js';
+import { TILE_W, TILE_H, WALL_HEIGHT_PX, worldToIso, computeVisibilityPolygon, pointInPolygon } from './iso.js';
+import { playerSightRange } from './content.js';
+import { AssetCache } from './assets.js';
+import { buildScene, sceneOccluders } from './scene.js';
 
 export class IsometricRenderer {
   constructor(canvas, classesConfig = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.classesConfig = classesConfig;
+    this.itemsConfig = {};
     this.exploredCells = new Set();
     this.lastMissionId = null;
     this.fogCanvas = document.createElement('canvas');
@@ -17,20 +21,50 @@ export class IsometricRenderer {
     this.playerAnim = new Map();
     this.lastRenderTime = 0;
     this.currentDt = 0.016;
+    this.currentCells = new Set();
+    this.presentation = null;
+    this.assets = new AssetCache();
+    this.scene = [];
   }
 
   resetExplored() {
     this.exploredCells.clear();
+    this.currentCells.clear();
+    this.playerAnim.clear();
+  }
+
+  setPresentation(presentation) {
+    this.assets.dispose();
+    this.presentation = presentation;
+    this.assets = new AssetCache(presentation?.assets || {});
+  }
+
+  dispose() {
+    this.assets.dispose();
+    this.playerAnim.clear();
+    this.resetExplored();
+    this.scene = [];
+    this.fogCanvas.width = this.fogCanvas.height = 0;
+  }
+
+  visibilityAt(x, y) {
+    const key = `${Math.floor(x / 2) * 2},${Math.floor(y / 2) * 2}`;
+    return this.currentCells.has(key) ? 'current' : this.exploredCells.has(key) ? 'explored' : 'unknown';
   }
 
   setClassesConfig(cfg) {
     this.classesConfig = cfg || {};
   }
 
+  setItemsConfig(cfg) {
+    this.itemsConfig = cfg;
+  }
+
   render(state, localPlayerId, mouseWorld, camera) {
     const ctx = this.ctx;
-    const W = this.canvas.width;
-    const H = this.canvas.height;
+    const W = camera.screenW;
+    const H = camera.screenH;
+    ctx.setTransform(this.canvas.width / W, 0, 0, this.canvas.height / H, 0, 0);
 
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     this.currentDt = this.lastRenderTime ? Math.min(0.1, Math.max(0.001, (now - this.lastRenderTime) / 1000)) : 0.016;
@@ -41,27 +75,22 @@ export class IsometricRenderer {
 
     if (!state || !state.map) return;
 
-    const mapKey = state.map.level_id || state.map.mission_id;
-    if (this.lastMissionId !== mapKey && state.mission_time < 1.0) {
-      this.exploredCells.clear();
+    const mapKey = state.world_id || state.map.world_id || state.map.level_id || state.map.mission_id;
+    if (this.lastMissionId !== mapKey) {
+      this.resetExplored();
       this.lastMissionId = mapKey;
     }
+    this.currentCells.clear();
+    const playerIds = new Set((state.players || []).map(p => p.id));
+    for (const id of this.playerAnim.keys()) if (!playerIds.has(id)) this.playerAnim.delete(id);
 
     // 1. Compute active visibility polygons for all living players (Shared Team Vision)
     const visions = [];
-    const walls = state.map.walls || [];
+    const walls = sceneOccluders(state.map);
     for (const p of state.players || []) {
       if (p.hp <= 0) continue;
-      const cls = this.classesConfig[p.class_id];
-      let range = cls ? cls.sight_range : 12.5;
-      const inv = p.inventory;
-      if (inv) {
-        const eq = inv.equipped || inv;
-        const hasLight =
-          (eq.quick_use && eq.quick_use.template_id === 'tactical_light') ||
-          (inv.storage || []).some((it) => it && it.template_id === 'tactical_light');
-        if (hasLight) range += 4.5;
-      }
+      const range = playerSightRange(p, this.classesConfig, this.itemsConfig);
+      if (range === null) continue;
       const poly = computeVisibilityPolygon(p.x, p.y, range, walls, 84);
       visions.push({ player: p, range, poly });
 
@@ -72,8 +101,9 @@ export class IsometricRenderer {
       const maxY = Math.min(state.map.height, Math.ceil((p.y + range) / 2) * 2);
       for (let gx = minX; gx < maxX; gx += 2) {
         for (let gy = minY; gy < maxY; gy += 2) {
-          if (Math.hypot(gx + 1 - p.x, gy + 1 - p.y) <= range * 0.92) {
+          if (pointInPolygon(gx + 1, gy + 1, poly)) {
             this.exploredCells.add(`${gx},${gy}`);
+            this.currentCells.add(`${gx},${gy}`);
           }
         }
       }
@@ -99,64 +129,10 @@ export class IsometricRenderer {
     this.drawSounds(ctx, state.sounds || [], camera);
     this.drawGroundDeployables(ctx, state.deployables || [], camera);
 
-    // 5. Draw Puzzle Terminals, Supply Crates/Body Chests & Loot Pickups
+    // Physical objects share one renderer-facing scene; markers are a later overlay.
     const localPlayer = (state.players || []).find((p) => p.id === localPlayerId);
-    this.drawLoot(ctx, state.map.loot || [], localPlayer, camera);
-    this.drawCrates(ctx, state.map.crates || [], localPlayer, camera);
-    this.drawPuzzles(ctx, state.map.puzzles || [], localPlayer, camera);
-
-    // 6. Depth-sorted 2.5D entities (walls, doors, turrets, enemies, players)
-    const renderables = [];
-
-    for (const w of walls) {
-      if (w.active === false) continue;
-      renderables.push({
-        depth: w.x + w.w * 0.5 + (w.y + w.h * 0.5),
-        kind: 'wall',
-        obj: w,
-      });
-    }
-
-    for (const dep of state.deployables || []) {
-      if (dep.type === 'turret') {
-        renderables.push({
-          depth: dep.x + dep.y,
-          kind: 'turret',
-          obj: dep,
-        });
-      }
-    }
-
-    for (const e of state.enemies || []) {
-      if (!e.visible) continue;
-      renderables.push({
-        depth: e.x + e.y,
-        kind: 'enemy',
-        obj: e,
-      });
-    }
-
-    for (const p of state.players || []) {
-      renderables.push({
-        depth: p.x + p.y,
-        kind: 'player',
-        obj: p,
-      });
-    }
-
-    renderables.sort((a, b) => a.depth - b.depth);
-
-    for (const item of renderables) {
-      if (item.kind === 'wall') {
-        this.drawIsoBox(ctx, item.obj, camera);
-      } else if (item.kind === 'turret') {
-        this.drawTurret(ctx, item.obj, camera);
-      } else if (item.kind === 'enemy') {
-        this.drawEnemy(ctx, item.obj, camera);
-      } else if (item.kind === 'player') {
-        this.drawPlayer(ctx, item.obj, item.obj.id === localPlayerId, mouseWorld, camera);
-      }
-    }
+    this.scene = buildScene(state, this.presentation, camera);
+    for (const entity of this.scene) this.drawSceneEntity(ctx, entity, localPlayerId, localPlayer, mouseWorld, camera);
 
     // 7. Draw Projectiles
     this.drawProjectiles(ctx, state.projectiles || [], camera);
@@ -164,9 +140,20 @@ export class IsometricRenderer {
     // 8. Draw Shared Co-op Fog of War Overlay
     this.drawFogOfWar(ctx, state.map, visions, camera);
 
-    // 8b. Re-draw visible/nearby Loot & Crate HUD markers above fog/walls so items are always easy to spot
+    // HUD text only; physical objects are never redrawn over walls or fog.
     this.drawLoot(ctx, state.map.loot || [], localPlayer, camera, true);
     this.drawCrates(ctx, state.map.crates || [], localPlayer, camera, true);
+    this.drawPuzzles(ctx, state.map.puzzles || [], localPlayer, camera, true);
+    for (const target of state.map.interactions || []) {
+      if (this.visibilityAt(target.x, target.y) === 'unknown') continue;
+      const point = worldToIso(target.x, target.y, camera);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = '600 12px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(`[E] ${target.label}`, point.x, point.y - 12);
+    }
+    for (const player of state.players || []) this.drawActorMarker(ctx, player, camera);
+    for (const enemy of state.enemies || []) if (enemy.visible) this.drawActorMarker(ctx, enemy, camera, true);
 
     // 9. Draw Crosshair at Mouse World Position
     if (mouseWorld && localPlayer && !localPlayer.downed) {
@@ -183,6 +170,34 @@ export class IsometricRenderer {
       ctx.stroke();
       ctx.restore();
     }
+  }
+
+  drawSceneEntity(ctx, entity, localId, localPlayer, mouseWorld, camera) {
+    const visual = this.presentation?.visuals[entity.visualId];
+    const material = this.presentation?.materials[entity.materialId];
+    if (visual?.sprite) {
+      const entry = this.assets.get(visual.sprite);
+      if (entry.state === 'ready') {
+        const direction = Math.round(((entity.orientation % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * visual.directions) % visual.directions;
+        const frame = Math.floor(entity.animation.time * visual.fps) % visual.frames;
+        const sw = entry.image.naturalWidth / visual.directions, sh = entry.image.naturalHeight / visual.frames;
+        const iso = worldToIso(entity.transform.x, entity.transform.y, camera);
+        ctx.drawImage(entry.image, direction * sw, frame * sh, sw, sh,
+          iso.x - visual.width * visual.pivot[0], iso.y - visual.height * visual.pivot[1], visual.width, visual.height);
+        return;
+      }
+    }
+    if (entity.kind === 'prop' || visual?.fallback === 'box') {
+      this.drawIsoBox(ctx, { ...entity.bounds, type: 'prop', render_height: visual?.elevation || 24, render_material: material }, camera);
+    } else if (entity.kind === 'wall') {
+      this.drawIsoBox(ctx, { ...entity.source, ...(entity.source.visual_id ? { render_height: visual?.elevation } : {}),
+        ...((entity.source.type === 'wall' || entity.source.material_id || entity.source.visual_id) ? { render_material: material } : {}) }, camera);
+    } else if (entity.kind === 'player') this.drawPlayer(ctx, { ...entity.source, ...(entity.source.material_id ? { render_color: material?.top } : {}) }, entity.entityId === localId, mouseWorld, camera);
+    else if (entity.kind === 'enemy') this.drawEnemy(ctx, { ...entity.source, ...(entity.source.material_id ? { color: material?.top } : {}) }, camera);
+    else if (entity.kind === 'turret') this.drawTurret(ctx, entity.source, camera);
+    else if (entity.kind === 'loot') this.drawLoot(ctx, [entity.source], localPlayer, camera);
+    else if (entity.kind === 'crate') this.drawCrates(ctx, [entity.source], localPlayer, camera);
+    else if (entity.kind === 'puzzle') this.drawPuzzles(ctx, [entity.source], localPlayer, camera);
   }
 
   drawIsoQuad(ctx, x, y, w, h, camera, fillStyle, strokeStyle = null) {
@@ -218,8 +233,23 @@ export class IsometricRenderer {
     };
 
     for (const seg of map.segments || []) {
-      const baseColor = themeColors[seg.theme] || '#121a28';
+      const material = this.presentation?.materials[seg.material_id || this.presentation.floor_materials[seg.theme]];
+      const baseColor = material?.top || themeColors[seg.theme] || '#121a28';
       this.drawIsoQuad(ctx, seg.x, seg.y, seg.w, seg.h, camera, baseColor, '#1e293b');
+      if (material?.texture) {
+        const entry = this.assets.get(material.texture);
+        if (entry.state === 'ready') {
+          ctx.save();
+          this.drawIsoQuad(ctx, seg.x, seg.y, seg.w, seg.h, camera, null);
+          ctx.clip();
+          const origin = worldToIso(seg.x, seg.y, camera);
+          ctx.transform(TILE_W / entry.image.naturalWidth, TILE_H / entry.image.naturalWidth,
+            -TILE_W / entry.image.naturalHeight, TILE_H / entry.image.naturalHeight, origin.x, origin.y);
+          ctx.fillStyle = ctx.createPattern(entry.image, 'repeat');
+          ctx.fillRect(0, 0, seg.w * entry.image.naturalWidth / 2, seg.h * entry.image.naturalHeight / 2);
+          ctx.restore();
+        }
+      }
 
       // Subtle 2-unit isometric floor grid
       ctx.lineWidth = 1;
@@ -279,17 +309,13 @@ export class IsometricRenderer {
     const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
     for (const lt of lootItems) {
       if (lt.collected) continue;
-      if (overlayPass && localPlayer) {
-        const d = Math.hypot(localPlayer.x - lt.x, localPlayer.y - lt.y);
-        const gx = Math.floor(lt.x / 2) * 2;
-        const gy = Math.floor(lt.y / 2) * 2;
-        if (d > 16.0 && !this.exploredCells.has(`${gx},${gy}`)) continue;
-      }
+      if (overlayPass && this.visibilityAt(lt.x, lt.y) === 'unknown') continue;
       const iso = worldToIso(lt.x, lt.y, camera);
       const itemKey = lt.type || lt.template_id || lt.item_type || 'credits';
       const color = colors[itemKey] || '#38bdf8';
       ctx.save();
 
+      if (!overlayPass) {
       // Glowing beacon ring under the item
       ctx.beginPath();
       ctx.ellipse(iso.x, iso.y, 14 + pulse * 4, 7 + pulse * 2, 0, 0, Math.PI * 2);
@@ -308,7 +334,9 @@ export class IsometricRenderer {
 
       ctx.fillStyle = color;
       ctx.fillRect(iso.x - 4, iso.y - 11, 8, 4);
+      }
 
+      if (overlayPass) {
       const wStr = lt.weight ? ` (${lt.weight}wt)` : '';
       const label = `${lt.name || itemKey.toUpperCase()}${wStr}`;
       ctx.font = 'bold 11px Inter, monospace';
@@ -327,18 +355,14 @@ export class IsometricRenderer {
           ctx.fillText('[PRESS E OR CLICK TO PICK UP]', iso.x, iso.y - 35);
         }
       }
+      }
       ctx.restore();
     }
   }
 
   drawCrates(ctx, crates, localPlayer, camera, overlayPass = false) {
     for (const cr of crates) {
-      if (overlayPass && localPlayer) {
-        const d = Math.hypot(localPlayer.x - cr.x, localPlayer.y - cr.y);
-        const gx = Math.floor(cr.x / 2) * 2;
-        const gy = Math.floor(cr.y / 2) * 2;
-        if (d > 16.0 && !this.exploredCells.has(`${gx},${gy}`)) continue;
-      }
+      if (overlayPass && this.visibilityAt(cr.x, cr.y) === 'unknown') continue;
       const items = cr.items || [];
       const isBody = cr.type === 'body_chest';
       const locked = Boolean(cr.locked);
@@ -347,6 +371,7 @@ export class IsometricRenderer {
       const fill = isBody ? '#450a0a' : locked ? '#451a03' : '#0f172a';
 
       ctx.save();
+      if (!overlayPass) {
       ctx.beginPath();
       ctx.ellipse(iso.x, iso.y, 22, 11, 0, 0, Math.PI * 2);
       ctx.strokeStyle = stroke;
@@ -358,7 +383,9 @@ export class IsometricRenderer {
       ctx.strokeStyle = stroke;
       ctx.lineWidth = 2;
       ctx.strokeRect(iso.x - 15, iso.y - 20, 30, 20);
+      }
 
+      if (overlayPass) {
       ctx.font = 'bold 11px monospace';
       ctx.textAlign = 'center';
       const countText = items.length > 0 ? ` [${items.length} ITEMS]` : ' [EMPTY]';
@@ -380,6 +407,7 @@ export class IsometricRenderer {
             iso.y - 39
           );
         }
+      }
       }
       ctx.restore();
     }
@@ -450,14 +478,16 @@ export class IsometricRenderer {
     ctx.restore();
   }
 
-  drawPuzzles(ctx, puzzles, localPlayer, camera) {
+  drawPuzzles(ctx, puzzles, localPlayer, camera, overlayPass = false) {
     for (const pz of puzzles) {
+      if (overlayPass && this.visibilityAt(pz.x, pz.y) === 'unknown') continue;
       const iso = worldToIso(pz.x, pz.y, camera);
       const isSolved = pz.solved;
       const color = isSolved ? '#10b981' : (pz.color || '#f59e0b');
 
       // Interaction ring
       ctx.save();
+      if (!overlayPass) {
       ctx.beginPath();
       ctx.ellipse(iso.x, iso.y, 26, 13, 0, 0, Math.PI * 2);
       ctx.strokeStyle = color;
@@ -469,7 +499,9 @@ export class IsometricRenderer {
       ctx.fillRect(iso.x - 8, iso.y - 24, 16, 24);
       ctx.strokeStyle = color;
       ctx.strokeRect(iso.x - 8, iso.y - 24, 16, 24);
+      }
 
+      if (overlayPass) {
       ctx.font = 'bold 11px monospace';
       ctx.textAlign = 'center';
       ctx.fillStyle = color;
@@ -482,6 +514,7 @@ export class IsometricRenderer {
           ctx.font = 'bold 12px monospace';
           ctx.fillText('[PRESS E TO HACK]', iso.x, iso.y - 44);
         }
+      }
       }
       ctx.restore();
     }
@@ -623,12 +656,12 @@ export class IsometricRenderer {
   }
 
   drawIsoBox(ctx, wall, camera) {
-    const hPx =
+    const hPx = wall.render_height ?? (
       wall.type === 'cover'
         ? WALL_HEIGHT_PX * 0.45
         : wall.type === 'ship_ramp'
         ? WALL_HEIGHT_PX * 0.35
-        : WALL_HEIGHT_PX;
+         : WALL_HEIGHT_PX);
 
     const p0 = worldToIso(wall.x, wall.y, camera);
     const p1 = worldToIso(wall.x + wall.w, wall.y, camera);
@@ -656,6 +689,12 @@ export class IsometricRenderer {
       leftColor = '#27272a';
       rightColor = '#18181b';
       strokeColor = '#52525b';
+    }
+    if (wall.render_material) {
+      topColor = wall.render_material.top;
+      leftColor = wall.render_material.left;
+      rightColor = wall.render_material.right;
+      strokeColor = wall.render_material.stroke;
     }
 
     ctx.save();
@@ -692,6 +731,17 @@ export class IsometricRenderer {
     ctx.closePath();
     ctx.fillStyle = topColor;
     ctx.fill();
+    if (wall.render_material?.texture) {
+      const entry = this.assets.get(wall.render_material.texture);
+      if (entry.state === 'ready') {
+        ctx.save(); ctx.clip();
+        ctx.transform(TILE_W / entry.image.naturalWidth, TILE_H / entry.image.naturalWidth,
+          -TILE_W / entry.image.naturalHeight, TILE_H / entry.image.naturalHeight, p0.x, p0.y - hPx);
+        ctx.fillStyle = ctx.createPattern(entry.image, 'repeat');
+        ctx.fillRect(0, 0, wall.w * entry.image.naturalWidth / 2, wall.h * entry.image.naturalHeight / 2);
+        ctx.restore();
+      }
+    }
     ctx.stroke();
     ctx.restore();
   }
@@ -736,28 +786,34 @@ export class IsometricRenderer {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // HP Bar
-    const hpRatio = Math.max(0, enemy.hp / enemy.max_hp);
+    ctx.restore();
+  }
+
+  drawActorMarker(ctx, actor, camera, enemy = false) {
+    const iso = worldToIso(actor.x, actor.y, camera);
+    const width = enemy ? 32 : 40, offset = enemy ? 36 : 48;
+    const hpRatio = Math.max(0, Math.min(1, actor.hp / actor.max_hp));
+    ctx.save();
     ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-    ctx.fillRect(iso.x - 16, iso.y - 36, 32, 5);
-    ctx.fillStyle = '#ef4444';
-    ctx.fillRect(iso.x - 16, iso.y - 36, 32 * hpRatio, 5);
-
-    // State badge (! or ?)
-    if (enemy.state !== 'patrol') {
+    ctx.fillRect(iso.x - width / 2, iso.y - offset, width, 5);
+    ctx.fillStyle = enemy || actor.downed ? '#ef4444' : '#22c55e';
+    ctx.fillRect(iso.x - width / 2, iso.y - offset, width * hpRatio, 5);
+    ctx.textAlign = 'center';
+    if (enemy && actor.state !== 'patrol') {
       ctx.font = 'bold 13px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = enemy.state === 'engaged' ? '#ef4444' : '#facc15';
-      ctx.fillText(enemy.state === 'engaged' ? '!' : '?', iso.x, iso.y - 42);
+      ctx.fillStyle = actor.state === 'engaged' ? '#ef4444' : '#facc15';
+      ctx.fillText(actor.state === 'engaged' ? '!' : '?', iso.x, iso.y - 42);
+    } else if (!enemy) {
+      ctx.font = 'bold 11px Inter, sans-serif'; ctx.fillStyle = '#f8fafc';
+      ctx.fillText(actor.downed ? `${actor.name} [DOWNED]` : actor.name, iso.x, iso.y - 53);
     }
-
     ctx.restore();
   }
 
   drawPlayer(ctx, player, isLocal, mouseWorld, camera) {
     const iso = worldToIso(player.x, player.y, camera);
     const cls = this.classesConfig[player.class_id] || {};
-    const color = cls.color || '#38bdf8';
+    const color = player.render_color || cls.color || '#38bdf8';
     const dt = this.currentDt || 0.016;
 
     ctx.save();
@@ -824,18 +880,6 @@ export class IsometricRenderer {
     } else {
       this.drawHumanoidStickFigure(ctx, player, isLocal, color, anim, mouseWorld, camera, project3D);
     }
-
-    // Callsign & HP Bar above head
-    const hpRatio = Math.max(0, player.hp / player.max_hp);
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-    ctx.fillRect(iso.x - 20, iso.y - 48, 40, 5);
-    ctx.fillStyle = player.downed ? '#ef4444' : '#22c55e';
-    ctx.fillRect(iso.x - 20, iso.y - 48, 40 * hpRatio, 5);
-
-    ctx.font = 'bold 11px Inter, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#f8fafc';
-    ctx.fillText(player.downed ? `${player.name} [DOWNED]` : player.name, iso.x, iso.y - 53);
 
     ctx.restore();
   }
@@ -1188,19 +1232,27 @@ export class IsometricRenderer {
   }
 
   drawFogOfWar(ctx, map, visions, camera) {
-    const W = this.canvas.width;
-    const H = this.canvas.height;
-    if (this.fogCanvas.width !== W || this.fogCanvas.height !== H) {
-      this.fogCanvas.width = W;
-      this.fogCanvas.height = H;
+    const W = camera.screenW;
+    const H = camera.screenH;
+    if (this.fogCanvas.width !== this.canvas.width || this.fogCanvas.height !== this.canvas.height) {
+      this.fogCanvas.width = this.canvas.width;
+      this.fogCanvas.height = this.canvas.height;
     }
 
     const fctx = this.fogCtx;
+    fctx.setTransform(this.fogCanvas.width / W, 0, 0, this.fogCanvas.height / H, 0, 0);
     fctx.clearRect(0, 0, W, H);
 
     // Fill with dark shroud over the entire viewport
-    fctx.fillStyle = 'rgba(4, 7, 13, 0.62)';
+    fctx.fillStyle = 'rgba(4, 7, 13, 0.98)';
     fctx.fillRect(0, 0, W, H);
+
+    // Previously seen floor cells remain dim; unknown floor is almost opaque.
+    fctx.globalCompositeOperation = 'destination-out';
+    for (const key of this.exploredCells) {
+      const [x, y] = key.split(',').map(Number);
+      this.drawIsoQuad(fctx, x, y, 2, 2, camera, 'rgba(0, 0, 0, 0.37)');
+    }
 
     // Cut out active line-of-sight polygons for all players
     fctx.globalCompositeOperation = 'destination-out';
@@ -1208,10 +1260,10 @@ export class IsometricRenderer {
       if (!v.poly || v.poly.length < 3) continue;
       fctx.beginPath();
       const first = worldToIso(v.poly[0].x, v.poly[0].y, camera);
-      fctx.moveTo(first.x, first.y - 12);
+      fctx.moveTo(first.x, first.y);
       for (let i = 1; i < v.poly.length; i++) {
         const pt = worldToIso(v.poly[i].x, v.poly[i].y, camera);
-        fctx.lineTo(pt.x, pt.y - 12);
+        fctx.lineTo(pt.x, pt.y);
       }
       fctx.closePath();
       fctx.fillStyle = 'rgba(0, 0, 0, 1)';
@@ -1219,6 +1271,6 @@ export class IsometricRenderer {
     }
     fctx.globalCompositeOperation = 'source-over';
 
-    ctx.drawImage(this.fogCanvas, 0, 0);
+    ctx.drawImage(this.fogCanvas, 0, 0, W, H);
   }
 }

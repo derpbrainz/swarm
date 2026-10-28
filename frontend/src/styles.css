@@ -318,6 +318,8 @@ body {
   text-transform: uppercase;
 }
 
+#hub-controls { pointer-events: auto; margin-top: 6px; }
+
 .hud-objective-text {
   font-size: 1rem;
   font-weight: 600;
@@ -416,13 +418,14 @@ body {
 
 /* PUZZLE MODAL */
 .modal-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: rgba(4, 7, 13, 0.72);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 50;
+  padding: 16px;
 }
 
 .modal-card {
@@ -430,7 +433,10 @@ body {
   border: 2px solid #38bdf8;
   border-radius: 10px;
   padding: 20px 24px;
-  min-width: 440px;
+  min-width: 0;
+  width: min(540px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
   max-width: 540px;
   display: flex;
   flex-direction: column;
@@ -829,4 +835,70 @@ body {
   background: rgba(4, 7, 13, 0.55);
   pointer-events: none;
   z-index: 150;
+}
+
+.command-feedback {
+  position: fixed;
+  left: 16px;
+  top: 8px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 12px;
+  background: #451a03;
+  border: 1px solid #f59e0b;
+  border-radius: 6px;
+  color: #fde68a;
+  z-index: 250;
+  pointer-events: none;
+  overflow-wrap: anywhere;
+}
+.inventory-toggle { display: none; }
+
+.panel, .card, .prep-player-slot, .prep-player-card, .player-info,
+.modal-header h3, .inv-slot-row > div, .chest-item-card > div { min-width: 0; }
+button { overflow-wrap: anywhere; }
+.stats-row, .player-row, .player-info, .card-header { flex-wrap: wrap; }
+.modal-header { gap: 12px; }
+.btn-close { flex-shrink: 0; }
+.card, .player-row, .stash-item, .prep-player-card, .modal-card { overflow-wrap: anywhere; }
+.class-dot { flex-shrink: 0; }
+.class-modal-grid { grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); }
+#puzzle-modal, #end-banner { z-index: 150; }
+
+@media (max-width: 1100px), (max-height: 650px) {
+  body { overflow-y: auto; }
+  .lobby-container { height: auto; min-height: 100dvh; }
+  .lobby-columns { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .mission-panel { grid-column: 1 / -1; }
+  .lobby-header, .prep-header { flex-wrap: wrap; gap: 12px; }
+  .prep-container { overflow-y: auto; }
+  .prep-layout { flex: none; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto;
+    grid-template-areas: "crate crate" "p0 p1" "p2 p3"; }
+  .prep-player-card { overflow-y: visible; }
+  .prep-crate-list { max-height: 260px; }
+}
+
+@media (max-width: 600px) {
+  .lobby-container, .prep-container { padding: 12px; }
+  .lobby-header h1, .prep-header h1 { font-size: 1.3rem; }
+  .lobby-columns { display: flex; flex-direction: column; }
+  .callsign-box { flex-wrap: wrap; width: 100%; }
+  .callsign-box label { width: 100%; }
+  .callsign-box input { flex: 1; min-width: 0; width: 100px; }
+  .prep-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "crate" "p0" "p1" "p2" "p3"; }
+  .prep-empty-slot { min-height: 80px; }
+  .prep-inv-grid, .prep-crate-list { grid-template-columns: minmax(0, 1fr); }
+  .modal-backdrop { padding: 10px; }
+  .modal-card { padding: 16px; max-height: calc(100dvh - 20px); }
+  #class-modal .modal-card { width: 100% !important; }
+  .class-modal-grid { max-height: none; overflow: visible; }
+  .chest-item-card { flex-wrap: wrap; gap: 8px; }
+  .hud-top { min-width: 0; width: calc(100% - 20px); padding: 8px; top: 10px; }
+  .hud-objective-text { font-size: 0.8rem; }
+  .hud-bottom-left { left: 10px; bottom: 10px; width: min(310px, calc(100% - 20px)); }
+  .hud-inventory-sidebar { right: 10px; top: 95px; width: min(290px, calc(100% - 20px));
+    max-height: calc(100dvh - 270px); z-index: 40; }
+  .inventory-toggle { display: block; }
+  .hud-inventory-sidebar:not(.inventory-expanded) > :not(.inventory-toggle) { display: none; }
+  .hud-inventory-sidebar:not(.inventory-expanded) { width: auto; }
+  .hud-events { display: none; }
 }

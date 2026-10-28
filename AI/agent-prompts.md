@@ -43,9 +43,10 @@ limitations, blockers and EXACT next action. Checkpoint after meaningful edits
 and verification and before risky operations or pauses. Mark tests/operations
 pending before execution; record results afterward. Following abrupt failure,
 inspect whether operations already occurred and rerun unrecorded verification,
-not destructive migrations/transfers/commits/pushes blindly. Local checkpoints
-survive session loss on this workspace, not machine/workspace loss unless
-committed/pushed; do not push unfinished work just to synchronize flags.
+not destructive migrations/transfers/commits blindly. Local checkpoints
+survive session loss on this workspace; local files/commits need a separate
+backup to survive workspace loss. Do not push to synchronize flags unless
+the user separately requests it.
 
 Follow all stage acceptance gates. Review-only subagents may help, but do not
 parallelize implementation stages. Expected-failure tests introduced early
@@ -87,33 +88,29 @@ process before an explicit runtime migration. Test error/rollback/retry,
 direct domain commands, two-client interactions, and browser state, not just
 happy paths. Make simulation clocks/RNG controlled and network queues bounded.
 
-Git delivery is authorized AFTER successful implementation and verification:
-inspect status, diff, recent history and upstream first. The review baseline
-was main one commit ahead of origin/main; do not push it blindly. Create/use
-the named implementation branch refactor/data-driven-foundation unless an
-existing user-provided task branch should be used. Never discard user work,
-overwrite a branch, stage unrelated files, commit secrets/runtime saves,
-amend, bypass hooks or force-push. Before delivery review every commit that
-will be pushed, including inherited unpushed commits. Commit intended work
-with the repository's message style and push the implementation branch with
-upstream using the confirmed origin destination. No PR/merge is requested.
+Local commits are authorized after successful implementation and verification.
+Inspect status, diff and recent history first. Create/use the implementation
+branch refactor/data-driven-foundation unless an existing user-provided task
+branch should be used. Never discard user work, overwrite a branch, stage
+unrelated files, commit secrets/runtime saves, amend or bypass hooks. Commit
+intended work using the repository's message style. Do not push automatically
+after a stage or the overall task; pushing needs a separate explicit user
+request. No remote verification, GitHub credentials, PR or merge is required.
 
-Stage 13 and the OVERALL TASK become COMPLETE only after all required gates
-pass, intended changes are committed, the push succeeds, and the remote
-upstream is verified to contain the expected commit. If credentials,
-protection, tests, or external requirements block delivery, keep the final
-stage incomplete/blocked and report the exact blocker; do not claim success.
-After verified implementation delivery, record its evidence and set Stage 13
-and overall Finished flags. Commit/push the changed plan/log, verify remote
-delivery again, THEN mark the mirrored task tracker complete. A failed marker
-push is still a delivery blocker even if local flags are checked. On recovery,
-verify the remote and pending checkpoint delivery before trusting final flags.
+Stage 13 and the OVERALL TASK become COMPLETE after all required gates pass,
+progress evidence/flags are saved, and intended changes including the final
+plan/log are committed locally. Set final Finished flags after implementation
+and verification, then include them in the completion commit. If that commit
+or its hooks fail, clear the final Finished flags and log the blocker. Verify
+the local commit before marking the mirrored tracker complete. On recovery,
+reconcile local files/history before trusting flags. Remote availability is
+not a blocker; failed required tests or local commits are.
 
 Final report: completed stages, meaningful fixes and extension capabilities,
-test commands/results, migration/default behavior notes, branch, commit SHA,
-verified remote destination, and honest residual limitations. Use the agent
-task tracker to mark completion. If running as a session Goal, also report
-the Goal complete only after the same delivery gates. Do not merge to main,
+test commands/results, migration/default behavior notes, branch, local commit
+SHA, and honest residual limitations. Do not claim a push occurred. Use the
+agent task tracker to mark completion. If running as a session Goal, report
+it complete only after the same local completion gates. Do not merge to main,
 deploy externally or enable production features merely to declare completion.
 ```
 
@@ -498,7 +495,7 @@ limitations. Complete Stage 12 before the final delivery stage.
 
 ```text
 Execute Stage 13 only after verified completion of Stages 01-12.
-Goal: truthful final verification, documentation, commit, push and task completion.
+Goal: truthful final verification, documentation, local commit and task completion.
 
 Run the committed content validation entry point, all Python tests, frontend
 unit tests, browser regressions/smoke, legacy migrations and persistence
@@ -517,31 +514,26 @@ state, extension recipes, versioned migration/backup, supported visuals and
 true3D limit, friendly-fire defaults, single-writer limitations and opt-in
 fixtures. Add CI running the verified commands with temporary storage.
 
-Finalize execution-log.md with completed implementation/verification and
-pending delivery commands before committing. Inspect git status, git diff,
-git diff --check, git log --oneline -10, origin/upstream and every commit to
-be pushed. Stage only task files. Never include runtime saves, secrets or
-unrelated user changes. Keep the chosen implementation branch; do not merge
-to main, create a PR, amend, bypass hooks or force-push.
+Finalize execution-log.md with implementation/verification evidence. Inspect
+git status, git diff, git diff --check, git log --oneline -10 and the intended
+local changes. Stage only task files, never runtime saves/secrets/unrelated
+user changes. Keep the implementation branch; no merge, PR, amend or hook
+bypass. Do not automatically push; a separate explicit user request is needed.
 
-Commit using the repo style. Run required hooks; fix failures and commit
-normally. Push the confirmed implementation branch to origin with upstream.
-Use git fetch/read-only remote checks as needed and verify the exact expected
-commit is present in the remote upstream. A successful local commit alone or
-attempted push is NOT completion. If tracked execution-log updates occur after
-push, commit and push those too before claiming a fully delivered clean branch.
+After all implementation/verification gates pass, set Stage 13 and overall
+Finished flags in implementation-plan.md. Include the final plan/log and
+implementation in a local commit using the repo style. Run required hooks.
+If the commit or hooks fail, clear final Finished flags and log the blocker;
+fix and retry normally. Verify the local commit contains the intended changes
+and progress documents, THEN mark the mirrored task tracker COMPLETE. If
+running as a session Goal, report it complete on the same evidence.
 
-After successful implementation push verification, record the delivery
-evidence and set Stage 13 and overall Finished flags in implementation-plan.md.
-Commit/push the changed plan/log and verify that delivery too. Only then mark
-the mirrored task tracker COMPLETE; if this is a session Goal, report it
-complete on the same evidence. If interrupted between these operations,
-reconcile local commits, flags, pending files and the actual remote before
-repeating any commit/push or claiming completion. On credentials/protection/
-test failure retain an incomplete delivery checkpoint and report the precise
-blocker without force; locally checked flags never override failed delivery.
+If interrupted, reconcile local history, flags, pending files and hook/test
+results before repeating a commit or claiming completion. Remote access and
+GitHub authentication are not required; no remote check or push is a task
+completion gate. Failed required verification/local commit stays incomplete.
 
 Final response: concise fixes and data-driven seams, actual test results,
-save/default compatibility, branch, final commit SHA, verified remote
-destination, and explicit remaining renderer/fixture/public-hosting limits.
+save/default compatibility, branch, final local commit SHA, and explicit
+remaining renderer/fixture/public-hosting limits. Do not claim remote delivery.
 ```

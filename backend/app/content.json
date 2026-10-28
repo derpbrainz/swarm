@@ -1,0 +1,1819 @@
+{
+  "schema_version": 1,
+  "content_version": "foundation-2",
+  "presentation": {
+    "assets": {
+      "test_floor": {"path": "visual/test-floor.svg"},
+      "test_detail": {"path": "visual/test-detail.svg"},
+      "test_actor": {"path": "visual/test-actor.svg"}
+    },
+    "materials": {
+      "steel": {"top": "#334155", "left": "#1e293b", "right": "#0f172a", "stroke": "#475569"},
+      "floor_hangar": {"top": "#111927", "left": "#111927", "right": "#111927", "stroke": "#1e293b"},
+      "floor_corridor": {"top": "#131c2b", "left": "#131c2b", "right": "#131c2b", "stroke": "#1e293b"},
+      "floor_biolab": {"top": "#0f2224", "left": "#0f2224", "right": "#0f2224", "stroke": "#1e293b"},
+      "floor_reactor": {"top": "#1f1621", "left": "#1f1621", "right": "#1f1621", "stroke": "#1e293b"},
+      "floor_command": {"top": "#141e30", "left": "#141e30", "right": "#141e30", "stroke": "#1e293b"},
+      "floor_extraction": {"top": "#12241e", "left": "#12241e", "right": "#12241e", "stroke": "#1e293b"},
+      "test_tiles": {"top": "#334155", "left": "#1e293b", "right": "#0f172a", "stroke": "#475569", "texture": "test_floor"},
+      "test_red": {"top": "#e02020", "left": "#e02020", "right": "#e02020", "stroke": "#e02020"}
+    },
+    "visuals": {
+      "wall": {"fallback": "wall", "material_id": "steel", "footprint": {"x": 0, "y": 0, "w": 1, "h": 1}, "width": 64, "height": 74, "pivot": [0.5, 1], "elevation": 42, "layer": 0},
+      "player": {"fallback": "player", "material_id": "steel", "footprint": {"x": -0.42, "y": -0.42, "w": 0.84, "h": 0.84}, "width": 48, "height": 56, "pivot": [0.5, 1], "elevation": 0, "layer": 0},
+      "enemy": {"fallback": "enemy", "material_id": "steel", "footprint": {"x": -0.5, "y": -0.5, "w": 1, "h": 1}, "width": 40, "height": 48, "pivot": [0.5, 1], "elevation": 0, "layer": 0},
+      "turret": {"fallback": "turret", "material_id": "steel", "footprint": {"x": -0.3, "y": -0.3, "w": 0.6, "h": 0.6}, "width": 24, "height": 24, "pivot": [0.5, 1], "elevation": 0, "layer": 0},
+      "loot": {"fallback": "loot", "material_id": "steel", "footprint": {"x": -0.2, "y": -0.2, "w": 0.4, "h": 0.4}, "width": 20, "height": 16, "pivot": [0.5, 1], "elevation": 0, "layer": 0},
+      "crate": {"fallback": "crate", "material_id": "steel", "footprint": {"x": -0.4, "y": -0.4, "w": 0.8, "h": 0.8}, "width": 30, "height": 20, "pivot": [0.5, 1], "elevation": 0, "layer": 0},
+      "puzzle": {"fallback": "puzzle", "material_id": "steel", "footprint": {"x": -0.2, "y": -0.2, "w": 0.4, "h": 0.4}, "width": 16, "height": 24, "pivot": [0.5, 1], "elevation": 0, "layer": 0},
+      "chair": {"fallback": "box", "material_id": "steel", "footprint": {"x": -0.4, "y": -0.4, "w": 0.8, "h": 0.8}, "width": 40, "height": 48, "pivot": [0.5, 1], "elevation": 24, "layer": 0},
+      "table": {"fallback": "box", "material_id": "steel", "footprint": {"x": -1, "y": -0.5, "w": 2, "h": 1}, "width": 96, "height": 48, "pivot": [0.5, 1], "elevation": 24, "layer": 0},
+      "console": {"fallback": "box", "material_id": "steel", "footprint": {"x": -0.5, "y": -0.4, "w": 1, "h": 0.8}, "width": 64, "height": 64, "pivot": [0.5, 1], "elevation": 36, "layer": 0},
+      "test_detail": {"fallback": "box", "material_id": "steel", "footprint": {"x": -0.5, "y": -0.4, "w": 1, "h": 0.8}, "width": 64, "height": 64, "pivot": [0.5, 1], "elevation": 36, "layer": 0, "sprite": "test_detail"},
+      "test_actor": {"fallback": "player", "material_id": "steel", "footprint": {"x": -0.42, "y": -0.42, "w": 0.84, "h": 0.84}, "width": 24, "height": 40, "pivot": [0.5, 1], "elevation": 0, "layer": 0, "sprite": "test_actor", "directions": 4, "frames": 2, "fps": 2}
+    },
+    "defaults": {"wall": "wall", "player": "player", "enemy": "enemy", "turret": "turret", "loot": "loot", "crate": "crate", "puzzle": "puzzle"},
+    "floor_materials": {"hangar": "floor_hangar", "corridor": "floor_corridor", "biolab": "floor_biolab", "reactor": "floor_reactor", "command": "floor_command", "extraction": "floor_extraction"}
+  },
+  "props": {
+    "chair": {"visual_id": "chair", "geometry": {}},
+    "table": {"visual_id": "table", "geometry": {"movement": {"x": -0.9, "y": -0.4, "w": 1.8, "h": 0.8}, "projectile": {"x": -0.8, "y": -0.3, "w": 1.6, "h": 0.6}, "acoustic": {"x": -0.9, "y": -0.4, "w": 1.8, "h": 0.8}}},
+    "console": {"visual_id": "console", "geometry": {"movement": {"x": -0.45, "y": -0.35, "w": 0.9, "h": 0.7}, "projectile": {"x": -0.45, "y": -0.35, "w": 0.9, "h": 0.7}, "sight": {"x": -0.45, "y": -0.35, "w": 0.9, "h": 0.7}, "acoustic": {"x": -0.45, "y": -0.35, "w": 0.9, "h": 0.7}, "interaction": {"x": -0.3, "y": 0.6, "w": 0.6, "h": 0.2}}, "interaction": {"type": "power_reroute", "radius": 2.8, "label": "Prop Console"}},
+    "stash_console": {"visual_id": "console", "geometry": {"movement": {"x": -0.45, "y": -0.35, "w": 0.9, "h": 0.7}, "interaction": {"x": -0.3, "y": 0.6, "w": 0.6, "h": 0.2}}, "interaction": {"type": "stash", "radius": 2.8, "label": "Shared Stash"}},
+    "mission_console": {"visual_id": "console", "geometry": {"movement": {"x": -0.45, "y": -0.35, "w": 0.9, "h": 0.7}, "interaction": {"x": -0.3, "y": 0.6, "w": 0.6, "h": 0.2}}, "interaction": {"type": "mission_selection", "radius": 2.8, "label": "Mission Selection / Departure"}}
+  },
+  "world_rules": {
+    "mission": {"movement": true, "interactions": true, "combat": true, "ai": true, "objectives": true, "extraction": true, "failure": true, "mission_clock": true, "cooldowns": true, "beneficial_use": "normal"},
+    "hub": {"movement": true, "interactions": true, "combat": false, "ai": false, "objectives": false, "extraction": false, "failure": false, "mission_clock": false, "cooldowns": false, "beneficial_use": "disabled"}
+  },
+  "worlds": {
+    "flagship_stub": {
+      "kind": "hub", "name": "Flagship Hub (Placeholder)", "rules_id": "hub", "width": 20, "height": 16,
+      "tiles": [{"id": "deck", "name": "Flagship Deck", "theme": "hangar", "x": 0, "y": 0, "w": 20, "h": 16}],
+      "walls": [{"x": 0, "y": 0, "w": 20, "h": 0.3, "blocks_sight": true}, {"x": 0, "y": 15.7, "w": 20, "h": 0.3, "blocks_sight": true}, {"x": 0, "y": 0.3, "w": 0.3, "h": 15.4, "blocks_sight": true}, {"x": 19.7, "y": 0.3, "w": 0.3, "h": 15.4, "blocks_sight": true}],
+      "props": [{"id": "stash", "archetype": "stash_console", "x": 7, "y": 7}, {"id": "missions", "archetype": "mission_console", "x": 11, "y": 7}, {"id": "table", "archetype": "table", "x": 9, "y": 10}, {"id": "chair", "archetype": "chair", "x": 12, "y": 10}],
+      "spawns": [{"x": 8, "y": 8}, {"x": 9, "y": 8}, {"x": 10, "y": 8}, {"x": 12, "y": 8}]
+    }
+  },
+  "classes": {
+    "vanguard": {
+      "id": "vanguard",
+      "faction": "squad",
+      "name": "Vanguard",
+      "title": "Frontline Breacher",
+      "color": "#C0392B",
+      "max_hp": 120,
+      "speed": 2.9,
+      "sprint_speed": 5,
+      "footstep_radius": 3.2,
+      "sight_range": 12,
+      "carry_capacity": 24,
+      "loadout_id": "vanguard",
+      "passive": {
+        "id": "bulwark",
+        "name": "Bulwark",
+        "description": "Takes reduced melee damage."
+      }
+    },
+    "tech": {
+      "id": "tech",
+      "faction": "squad",
+      "name": "Tech",
+      "title": "Field Engineer",
+      "color": "#2980B9",
+      "max_hp": 100,
+      "speed": 3.2,
+      "sprint_speed": 5.5,
+      "footstep_radius": 2.6,
+      "sight_range": 13,
+      "carry_capacity": 18,
+      "loadout_id": "tech",
+      "passive": {
+        "id": "field_scanner",
+        "name": "Field Scanner",
+        "description": "Can bypass security terminals."
+      }
+    },
+    "medic": {
+      "id": "medic",
+      "faction": "squad",
+      "name": "Medic",
+      "title": "Combat Medic",
+      "color": "#27AE60",
+      "max_hp": 90,
+      "speed": 3.3,
+      "sprint_speed": 5.7,
+      "footstep_radius": 2.4,
+      "sight_range": 12.5,
+      "carry_capacity": 15,
+      "loadout_id": "medic",
+      "passive": {
+        "id": "triage",
+        "name": "Triage",
+        "description": "Healing fields restore more health below half health."
+      }
+    },
+    "recon": {
+      "id": "recon",
+      "faction": "squad",
+      "name": "Recon",
+      "title": "Silent Scout",
+      "color": "#8E44AD",
+      "max_hp": 80,
+      "speed": 3.6,
+      "sprint_speed": 6.2,
+      "footstep_radius": 1.8,
+      "sight_range": 14,
+      "carry_capacity": 12,
+      "loadout_id": "recon",
+      "passive": {
+        "id": "quiet_step",
+        "name": "Quiet Step",
+        "description": "Quiet movement generates a small sound radius."
+      }
+    }
+  },
+  "loadouts": {
+    "vanguard": {
+      "primary_weapon": "breaching_shotgun",
+      "secondary_weapon": "service_pistol",
+      "special_ability": "shockwave_shield",
+      "quick_use": "medkit",
+      "storage": [
+        "ammo_pack",
+        "medkit"
+      ]
+    },
+    "tech": {
+      "primary_weapon": "compact_smg",
+      "secondary_weapon": "machine_pistol",
+      "special_ability": "auto_turret",
+      "quick_use": "portable_turret",
+      "storage": [
+        "ammo_pack",
+        "medkit"
+      ]
+    },
+    "medic": {
+      "primary_weapon": "combat_carbine",
+      "secondary_weapon": "service_pistol",
+      "special_ability": "nano_field",
+      "quick_use": "medkit",
+      "storage": [
+        "ammo_pack",
+        "medkit"
+      ]
+    },
+    "recon": {
+      "primary_weapon": "suppressed_rifle",
+      "secondary_weapon": "flare_revolver",
+      "special_ability": "sonar_pulse",
+      "quick_use": "sonar_beacon",
+      "storage": [
+        "ammo_pack",
+        "medkit"
+      ]
+    }
+  },
+  "weapons": {
+    "breaching_shotgun": {
+      "damage": 14,
+      "fire_rate": 1.2,
+      "projectile_speed": 28,
+      "range": 10,
+      "pellets": 5,
+      "spread": 0.22,
+      "sound_radius": 14,
+      "mag_size": 6,
+      "reload_time": 2.2,
+      "color": "#E74C3C",
+      "can_fire_while_running": false,
+      "fire_sound": "weapon_fire_shotgun",
+      "reload_sound": "weapon_reload_shotgun"
+    },
+    "compact_smg": {
+      "damage": 8,
+      "fire_rate": 4,
+      "projectile_speed": 34,
+      "range": 16,
+      "pellets": 1,
+      "spread": 0.04,
+      "sound_radius": 10,
+      "mag_size": 30,
+      "reload_time": 2.5,
+      "color": "#3498DB",
+      "can_fire_while_running": false,
+      "fire_sound": "weapon_fire_machinegun",
+      "reload_sound": "weapon_reload_machinegun"
+    },
+    "combat_carbine": {
+      "damage": 10,
+      "fire_rate": 3,
+      "projectile_speed": 38,
+      "range": 18,
+      "pellets": 1,
+      "spread": 0.03,
+      "sound_radius": 10,
+      "mag_size": 20,
+      "reload_time": 2,
+      "color": "#2ECC71",
+      "can_fire_while_running": false,
+      "fire_sound": "weapon_fire_machinegun",
+      "reload_sound": "weapon_reload_machinegun"
+    },
+    "suppressed_rifle": {
+      "damage": 18,
+      "fire_rate": 1.5,
+      "projectile_speed": 45,
+      "range": 24,
+      "pellets": 1,
+      "spread": 0.01,
+      "sound_radius": 4.5,
+      "mag_size": 10,
+      "reload_time": 2.8,
+      "color": "#9B59B6",
+      "can_fire_while_running": false,
+      "fire_sound": "weapon_fire_machinegun",
+      "reload_sound": "weapon_reload_machinegun"
+    },
+    "plasma_lmg": {
+      "damage": 12,
+      "fire_rate": 5,
+      "projectile_speed": 30,
+      "range": 20,
+      "pellets": 1,
+      "spread": 0.06,
+      "sound_radius": 12,
+      "mag_size": 40,
+      "reload_time": 3.5,
+      "color": "#F39C12",
+      "can_fire_while_running": false,
+      "fire_sound": "weapon_fire_plasma",
+      "reload_sound": "weapon_reload_plasma"
+    },
+    "rail_carbine": {
+      "damage": 22,
+      "fire_rate": 1,
+      "projectile_speed": 55,
+      "range": 28,
+      "pellets": 1,
+      "spread": 0.005,
+      "sound_radius": 6,
+      "mag_size": 8,
+      "reload_time": 3,
+      "color": "#1ABC9C",
+      "can_fire_while_running": false,
+      "fire_sound": "weapon_fire_machinegun",
+      "reload_sound": "weapon_reload_machinegun"
+    },
+    "service_pistol": {
+      "damage": 7,
+      "fire_rate": 2,
+      "projectile_speed": 32,
+      "range": 12,
+      "pellets": 1,
+      "spread": 0.05,
+      "sound_radius": 8,
+      "mag_size": 12,
+      "reload_time": 1.8,
+      "color": "#BDC3C7",
+      "can_fire_while_running": true,
+      "fire_sound": "weapon_fire_pistol",
+      "reload_sound": "weapon_reload_pistol"
+    },
+    "machine_pistol": {
+      "damage": 6,
+      "fire_rate": 5,
+      "projectile_speed": 30,
+      "range": 10,
+      "pellets": 1,
+      "spread": 0.07,
+      "sound_radius": 9,
+      "mag_size": 22,
+      "reload_time": 2,
+      "color": "#95A5A6",
+      "can_fire_while_running": true,
+      "fire_sound": "weapon_fire_pistol",
+      "reload_sound": "weapon_reload_pistol"
+    },
+    "flare_revolver": {
+      "damage": 16,
+      "fire_rate": 1,
+      "projectile_speed": 26,
+      "range": 14,
+      "pellets": 1,
+      "spread": 0.03,
+      "sound_radius": 11,
+      "mag_size": 6,
+      "reload_time": 2.4,
+      "color": "#E67E22",
+      "can_fire_while_running": true,
+      "fire_sound": "weapon_fire_machinegun",
+      "reload_sound": "weapon_reload_machinegun"
+    }
+  },
+  "effects": {
+    "shockwave_shield": {
+      "behavior": "shockwave_shield",
+      "cooldown": 18,
+      "duration": 4,
+      "radius": 4,
+      "push_offset": 0.2,
+      "push_multiplier": 1.6,
+      "damage": 15,
+      "sound_radius": 9,
+      "melee_multiplier": 0.25,
+      "melee_minimum": 2
+    },
+    "auto_turret": {
+      "behavior": "turret",
+      "cooldown": 22,
+      "duration": 8,
+      "deploy_offset": 1.2,
+      "range": 10.5,
+      "fire_interval": 0.28,
+      "damage": 9,
+      "projectile_speed": 30,
+      "projectile_ttl": 0.5,
+      "projectile_radius": 0.14,
+      "projectile_offset": 0.4,
+      "color": "#5DADE2",
+      "sound_radius": 7.5,
+      "fire_sound": "weapon_fire_machinegun"
+    },
+    "nano_field": {
+      "behavior": "nano_field",
+      "cooldown": 20,
+      "duration": 6,
+      "radius": 3.8,
+      "heal_interval": 0.5,
+      "heal": 5,
+      "low_health_heal": 8,
+      "low_health_threshold": 0.5,
+      "immediate_revive_minimum": 35,
+      "immediate_revive_fraction": 0.4,
+      "tick_revive_hp": 30
+    },
+    "sonar_pulse": {
+      "behavior": "sonar",
+      "cooldown": 16,
+      "duration": 3,
+      "radius": 18
+    },
+    "medkit": {
+      "behavior": "heal",
+      "heal": 45
+    },
+    "stim_injector": {
+      "behavior": "heal",
+      "heal": 25
+    },
+    "tactical_light": {
+      "behavior": "sight_boost",
+      "sight_boost": 4.5
+    },
+    "portable_turret": {
+      "behavior": "turret",
+      "duration": 10,
+      "deploy_offset": 1.1,
+      "range": 10.5,
+      "fire_interval": 0.28,
+      "damage": 9,
+      "projectile_speed": 30,
+      "projectile_ttl": 0.5,
+      "projectile_radius": 0.14,
+      "projectile_offset": 0.4,
+      "color": "#5DADE2",
+      "sound_radius": 7.5,
+      "fire_sound": "weapon_fire_machinegun"
+    },
+    "sonar_beacon": {
+      "behavior": "sonar",
+      "duration": 4,
+      "radius": 18
+    },
+    "ammo_refill": {
+      "behavior": "ammo_refill"
+    },
+    "credits": {
+      "behavior": "loot",
+      "loot": 150
+    },
+    "isotope_cell": {
+      "behavior": "loot",
+      "loot": 300
+    }
+  },
+  "items": {
+    "breaching_shotgun": {
+      "id": "breaching_shotgun",
+      "name": "Breaching Shotgun",
+      "category": "primary_weapon",
+      "weight": 6,
+      "description": "Close-range shotgun with high burst damage.",
+      "weapon_id": "breaching_shotgun"
+    },
+    "compact_smg": {
+      "id": "compact_smg",
+      "name": "Compact SMG",
+      "category": "primary_weapon",
+      "weight": 4,
+      "description": "Fast-firing compact submachine gun.",
+      "weapon_id": "compact_smg"
+    },
+    "combat_carbine": {
+      "id": "combat_carbine",
+      "name": "Combat Carbine",
+      "category": "primary_weapon",
+      "weight": 5,
+      "description": "Balanced carbine for sustained fire.",
+      "weapon_id": "combat_carbine"
+    },
+    "suppressed_rifle": {
+      "id": "suppressed_rifle",
+      "name": "Suppressed Rifle",
+      "category": "primary_weapon",
+      "weight": 5,
+      "description": "Quiet precision rifle for scouting.",
+      "weapon_id": "suppressed_rifle"
+    },
+    "plasma_lmg": {
+      "id": "plasma_lmg",
+      "name": "Plasma LMG",
+      "category": "primary_weapon",
+      "weight": 8,
+      "description": "Heavy plasma machine gun with sustained output.",
+      "weapon_id": "plasma_lmg"
+    },
+    "rail_carbine": {
+      "id": "rail_carbine",
+      "name": "Rail Carbine",
+      "category": "primary_weapon",
+      "weight": 6,
+      "description": "High-velocity rail weapon for long-range shots.",
+      "weapon_id": "rail_carbine"
+    },
+    "service_pistol": {
+      "id": "service_pistol",
+      "name": "Service Pistol",
+      "category": "secondary_weapon",
+      "weight": 2,
+      "description": "Reliable backup sidearm.",
+      "weapon_id": "service_pistol"
+    },
+    "machine_pistol": {
+      "id": "machine_pistol",
+      "name": "Machine Pistol",
+      "category": "secondary_weapon",
+      "weight": 3,
+      "description": "Rapid-fire compact pistol.",
+      "weapon_id": "machine_pistol"
+    },
+    "flare_revolver": {
+      "id": "flare_revolver",
+      "name": "Flare Revolver",
+      "category": "secondary_weapon",
+      "weight": 3,
+      "description": "High-damage revolver with flare rounds.",
+      "weapon_id": "flare_revolver"
+    },
+    "shockwave_shield": {
+      "id": "shockwave_shield",
+      "name": "Shockwave Shield",
+      "category": "special_ability",
+      "weight": 3,
+      "description": "Projects a concussive barrier that blocks projectiles and pushes enemies back.",
+      "effect_id": "shockwave_shield"
+    },
+    "auto_turret": {
+      "id": "auto_turret",
+      "name": "Auto Turret",
+      "category": "special_ability",
+      "weight": 4,
+      "description": "Deploys a short-lived turret that automatically targets nearby enemies.",
+      "effect_id": "auto_turret"
+    },
+    "nano_field": {
+      "id": "nano_field",
+      "name": "Nano Field",
+      "category": "special_ability",
+      "weight": 3,
+      "description": "Creates a healing field that restores health to allies inside it.",
+      "effect_id": "nano_field"
+    },
+    "sonar_pulse": {
+      "id": "sonar_pulse",
+      "name": "Sonar Pulse",
+      "category": "special_ability",
+      "weight": 2,
+      "description": "Emits a quiet pulse that reveals enemies.",
+      "effect_id": "sonar_pulse"
+    },
+    "medkit": {
+      "id": "medkit",
+      "name": "Medkit",
+      "category": "quick_use",
+      "weight": 2,
+      "description": "Consumable medical kit that restores health.",
+      "effect_id": "medkit",
+      "consumable": true
+    },
+    "stim_injector": {
+      "id": "stim_injector",
+      "name": "Stim Injector",
+      "category": "quick_use",
+      "weight": 1,
+      "description": "Quick stimulant that restores a small amount of health.",
+      "effect_id": "stim_injector",
+      "consumable": true
+    },
+    "tactical_light": {
+      "id": "tactical_light",
+      "name": "Tactical Light",
+      "category": "quick_use",
+      "weight": 2,
+      "description": "Mounted light that improves vision range.",
+      "effect_id": "tactical_light",
+      "consumable": false
+    },
+    "portable_turret": {
+      "id": "portable_turret",
+      "name": "Portable Turret",
+      "category": "quick_use",
+      "weight": 4,
+      "description": "Deployable turret that targets nearby enemies.",
+      "effect_id": "portable_turret",
+      "consumable": true
+    },
+    "sonar_beacon": {
+      "id": "sonar_beacon",
+      "name": "Sonar Beacon",
+      "category": "quick_use",
+      "weight": 2,
+      "description": "Deployable beacon that reveals enemies.",
+      "effect_id": "sonar_beacon",
+      "consumable": true
+    },
+    "ammo_pack": {
+      "id": "ammo_pack",
+      "name": "Ammo Pack",
+      "category": "storage",
+      "weight": 2,
+      "description": "Standard ammunition pack. Refills the active magazine.",
+      "effect_id": "ammo_refill",
+      "consumable": false
+    },
+    "heavy_ammo": {
+      "id": "heavy_ammo",
+      "name": "Heavy Ammo",
+      "category": "storage",
+      "weight": 4,
+      "description": "Heavy ammunition pack. Refills the active magazine.",
+      "effect_id": "ammo_refill",
+      "consumable": false
+    },
+    "credits": {
+      "id": "credits",
+      "name": "Credits",
+      "category": "storage",
+      "weight": 2,
+      "description": "Stored currency loot.",
+      "effect_id": "credits",
+      "consumable": false
+    },
+    "isotope_cell": {
+      "id": "isotope_cell",
+      "name": "Isotope Cell",
+      "category": "storage",
+      "weight": 4,
+      "description": "Valuable energy cell loot.",
+      "effect_id": "isotope_cell",
+      "consumable": false
+    }
+  },
+  "puzzles": {
+    "power_reroute": {"handler": "power_reroute", "node_count": 4, "allow_tech_bypass": true},
+    "signal_decrypt": {"handler": "signal_decrypt", "sequence_length": 4, "symbols": ["A7", "C4", "F9", "E2", "B5", "D8"], "allow_tech_bypass": true}
+  },
+  "attacks": {
+    "stalker_claw": {"handler": "melee", "range": 1.2, "damage": 12, "cooldown": 1.2},
+    "spitter_acid": {"handler": "projectile", "range": 8.5, "damage": 9, "cooldown": 1.5, "projectile_speed": 9},
+    "brute_claw": {"handler": "melee", "range": 1.2, "damage": 22, "cooldown": 1.8}
+  },
+  "encounters": {},
+  "enemies": {
+    "stalker": {
+      "id": "stalker",
+      "faction": "swarm",
+      "name": "Stalker",
+      "color": "#7F8C8D",
+      "max_hp": 45,
+      "speed": 5.5,
+      "patrol_speed": 3,
+      "radius": 0.7,
+      "sight_range": 9,
+      "sight_angle": 1.9,
+      "hearing_multiplier": 1.25,
+      "attacks": ["stalker_claw"]
+    },
+    "spitter": {
+      "id": "spitter",
+      "faction": "swarm",
+      "name": "Spitter",
+      "color": "#16A085",
+      "max_hp": 35,
+      "speed": 4.8,
+      "patrol_speed": 2.5,
+      "radius": 0.6,
+      "sight_range": 10.5,
+      "sight_angle": 1.9,
+      "hearing_multiplier": 1,
+      "attacks": ["spitter_acid"]
+    },
+    "brute": {
+      "id": "brute",
+      "faction": "swarm",
+      "name": "Brute",
+      "color": "#B03A2E",
+      "max_hp": 120,
+      "speed": 4,
+      "patrol_speed": 2,
+      "radius": 1.1,
+      "sight_range": 7.5,
+      "sight_angle": 1.9,
+      "hearing_multiplier": 1.1,
+      "attacks": ["brute_claw"]
+    }
+  },
+  "missions": {
+    "outpost": {
+      "id": "outpost",
+      "name": "Derelict Outpost",
+      "description": "Board the dark orbital station, restore power to the security bulkheads, and extract.",
+      "difficulty": "Standard",
+      "prerequisites": [],
+      "unlock_requirement": null,
+      "enemy_multiplier": 1,
+      "grid_w": 4,
+      "grid_h": 3,
+      "min_segments": 4,
+      "max_segments": 6,
+      "required_templates": ["command_hub"],
+      "allowed_templates": [
+        "drop_hangar",
+        "corridor_hub",
+        "security_corridor",
+        "command_hub",
+        "extraction_pad"
+      ],
+      "previous_level_accepts_tested": true,
+      "completion_effects": ["activate_extraction"]
+    },
+    "biolab": {
+      "id": "biolab",
+      "name": "Bio-Lab Containment",
+      "description": "Breach the infested xenobiology wing, decrypt quarantine locks, and reach extraction.",
+      "difficulty": "Hard",
+      "prerequisites": [],
+      "unlock_requirement": null,
+      "enemy_multiplier": 1.3,
+      "grid_w": 4,
+      "grid_h": 4,
+      "min_segments": 5,
+      "max_segments": 7,
+      "required_templates": ["bio_chamber"],
+      "allowed_templates": [
+        "drop_hangar",
+        "corridor_hub",
+        "security_corridor",
+        "bio_chamber",
+        "command_hub",
+        "extraction_pad"
+      ],
+      "previous_level_accepts_tested": false,
+      "completion_effects": ["activate_extraction"]
+    },
+    "reactor": {
+      "id": "reactor",
+      "name": "Core Meltdown",
+      "description": "Fight through heavy swarm presence in the reactor sector, stabilize cooling relays, and evacuate.",
+      "difficulty": "Extreme",
+      "prerequisites": [
+        "outpost",
+        "biolab"
+      ],
+      "unlock_requirement": "Complete 'Derelict Outpost' or 'Bio-Lab Containment' first to unlock",
+      "enemy_multiplier": 1.6,
+      "grid_w": 5,
+      "grid_h": 4,
+      "min_segments": 6,
+      "max_segments": 8,
+      "required_templates": ["reactor_hall"],
+      "allowed_templates": [
+        "drop_hangar",
+        "corridor_hub",
+        "security_corridor",
+        "bio_chamber",
+        "reactor_hall",
+        "command_hub",
+        "extraction_pad"
+      ],
+      "previous_level_accepts_tested": false,
+      "completion_effects": ["activate_extraction"]
+    }
+  },
+  "segments": {
+    "drop_hangar": {
+      "id": "drop_hangar",
+      "name": "Docking Bay 01",
+      "grid_w": 1,
+      "grid_h": 1,
+      "width": 16,
+      "height": 16,
+      "theme": "hangar",
+      "role": "start",
+      "crate_spawn": {"x": 10.0, "y": 8.0, "locked": false},
+      "connector_ports": [
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "E"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "S"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "N"
+        }
+      ],
+      "interior_walls": [
+        {
+          "x": 11,
+          "y": 2,
+          "w": 1.5,
+          "h": 3.2,
+          "blocks_sight": true
+        },
+        {
+          "x": 11,
+          "y": 10.8,
+          "w": 1.5,
+          "h": 3.2,
+          "blocks_sight": true
+        }
+      ],
+      "puzzle_slots": [
+        {
+          "x": 9.5,
+          "y": 4.2,
+          "type": "power_reroute",
+          "label": "Unlock Hangar Blast Door"
+        },
+        {
+          "x": 9.5,
+          "y": 11.8,
+          "type": "power_reroute",
+          "label": "Unlock Hangar Bulkhead"
+        }
+      ],
+      "enemy_spawns": [
+        {
+          "type": "stalker",
+          "x": 13.5,
+          "y": 3.5,
+          "patrol_dx": 0,
+          "patrol_dy": 1
+        }
+      ],
+      "loot_spawns": [
+        {
+          "type": "tactical_light",
+          "x": 8.6,
+          "y": 5.8
+        },
+        {
+          "type": "medkit",
+          "x": 8.6,
+          "y": 10.2
+        },
+        {
+          "type": "ammo_pack",
+          "x": 13.5,
+          "y": 4.2
+        },
+        {
+          "type": "machine_pistol",
+          "x": 13.5,
+          "y": 11.8
+        }
+      ],
+      "loot_count": 1
+    },
+    "corridor_hub": {
+      "id": "corridor_hub",
+      "name": "Corridor Hub",
+      "grid_w": 1,
+      "grid_h": 1,
+      "width": 16,
+      "height": 16,
+      "theme": "corridor",
+      "role": "room",
+      "crate_spawn": {"x": 3.4, "y": 12.8, "locked": true},
+      "connector_ports": [
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "N"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "S"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "E"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "W"
+        }
+      ],
+      "interior_walls": [
+        {
+          "x": 3.5,
+          "y": 3.5,
+          "w": 2,
+          "h": 2,
+          "blocks_sight": true
+        },
+        {
+          "x": 10.5,
+          "y": 10.5,
+          "w": 2,
+          "h": 2,
+          "blocks_sight": true
+        }
+      ],
+      "puzzle_slots": [
+        {
+          "x": 4,
+          "y": 6,
+          "type": "power_reroute",
+          "label": "Reroute Hub Power"
+        },
+        {
+          "x": 12,
+          "y": 13,
+          "type": "signal_decrypt",
+          "label": "Decrypt Hub Relay"
+        }
+      ],
+      "enemy_spawns": [
+        {
+          "type": "stalker",
+          "x": 13,
+          "y": 8,
+          "patrol_dx": -4,
+          "patrol_dy": 0
+        },
+        {
+          "type": "spitter",
+          "x": 3,
+          "y": 13,
+          "patrol_dx": 0,
+          "patrol_dy": -4
+        }
+      ],
+      "loot_spawns": [
+        {
+          "type": "portable_turret",
+          "x": 8,
+          "y": 8
+        },
+        {
+          "type": "ammo_pack",
+          "x": 8,
+          "y": 4
+        },
+        {
+          "type": "medkit",
+          "x": 13,
+          "y": 13
+        },
+        {
+          "type": "sonar_beacon",
+          "x": 3,
+          "y": 3
+        }
+      ],
+      "loot_count": 1
+    },
+    "security_corridor": {
+      "id": "security_corridor",
+      "name": "Security Checkpoint",
+      "grid_w": 2,
+      "grid_h": 1,
+      "width": 32,
+      "height": 16,
+      "theme": "corridor",
+      "role": "room",
+      "crate_spawn": {"x": 3.4, "y": 12.8, "locked": true},
+      "connector_ports": [
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "W"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "N"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "S"
+        },
+        {
+          "cell_x": 1,
+          "cell_y": 0,
+          "dir": "E"
+        },
+        {
+          "cell_x": 1,
+          "cell_y": 0,
+          "dir": "N"
+        },
+        {
+          "cell_x": 1,
+          "cell_y": 0,
+          "dir": "S"
+        }
+      ],
+      "interior_walls": [
+        {
+          "x": 4.5,
+          "y": 3,
+          "w": 2,
+          "h": 2.5,
+          "blocks_sight": true
+        },
+        {
+          "x": 4.5,
+          "y": 10.5,
+          "w": 2,
+          "h": 2.5,
+          "blocks_sight": true
+        },
+        {
+          "x": 15,
+          "y": 6,
+          "w": 2,
+          "h": 4,
+          "blocks_sight": true
+        },
+        {
+          "x": 24.5,
+          "y": 3,
+          "w": 2,
+          "h": 2.5,
+          "blocks_sight": true
+        },
+        {
+          "x": 24.5,
+          "y": 10.5,
+          "w": 2,
+          "h": 2.5,
+          "blocks_sight": true
+        }
+      ],
+      "puzzle_slots": [
+        {
+          "x": 12,
+          "y": 4,
+          "type": "power_reroute",
+          "label": "Reroute Security Bulkhead Power"
+        },
+        {
+          "x": 20,
+          "y": 12,
+          "type": "signal_decrypt",
+          "label": "Override Checkpoint Lock"
+        }
+      ],
+      "enemy_spawns": [
+        {
+          "type": "stalker",
+          "x": 10.5,
+          "y": 4,
+          "patrol_dx": 0,
+          "patrol_dy": 8
+        },
+        {
+          "type": "stalker",
+          "x": 21.5,
+          "y": 12,
+          "patrol_dx": 0,
+          "patrol_dy": -8
+        },
+        {
+          "type": "spitter",
+          "x": 26.5,
+          "y": 8,
+          "patrol_dx": -4,
+          "patrol_dy": 0
+        }
+      ],
+      "loot_spawns": [
+        {
+          "type": "ammo_pack",
+          "x": 11,
+          "y": 12.5
+        },
+        {
+          "type": "medkit",
+          "x": 21,
+          "y": 3.5
+        },
+        {
+          "type": "plasma_lmg",
+          "x": 8.5,
+          "y": 8
+        },
+        {
+          "type": "tactical_light",
+          "x": 20.5,
+          "y": 8
+        }
+      ],
+      "loot_count": 1
+    },
+    "bio_chamber": {
+      "id": "bio_chamber",
+      "name": "Xenobiology Labs",
+      "grid_w": 1,
+      "grid_h": 2,
+      "width": 16,
+      "height": 32,
+      "theme": "biolab",
+      "role": "room",
+      "crate_spawn": {"x": 3.4, "y": 28.8, "locked": true},
+      "connector_ports": [
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "N"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "W"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "E"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 1,
+          "dir": "S"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 1,
+          "dir": "W"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 1,
+          "dir": "E"
+        }
+      ],
+      "interior_walls": [
+        {
+          "x": 3.5,
+          "y": 4,
+          "w": 2.5,
+          "h": 2,
+          "blocks_sight": false
+        },
+        {
+          "x": 10,
+          "y": 4,
+          "w": 2.5,
+          "h": 2,
+          "blocks_sight": false
+        },
+        {
+          "x": 6.5,
+          "y": 14.5,
+          "w": 3,
+          "h": 3,
+          "blocks_sight": true
+        },
+        {
+          "x": 3.5,
+          "y": 25,
+          "w": 2.5,
+          "h": 2,
+          "blocks_sight": false
+        },
+        {
+          "x": 10,
+          "y": 25,
+          "w": 2.5,
+          "h": 2,
+          "blocks_sight": false
+        }
+      ],
+      "puzzle_slots": [
+        {
+          "x": 4.5,
+          "y": 12,
+          "type": "signal_decrypt",
+          "label": "Decrypt Bio-Quarantine Airlock"
+        },
+        {
+          "x": 11.5,
+          "y": 20,
+          "type": "power_reroute",
+          "label": "Purge Containment Seal"
+        }
+      ],
+      "enemy_spawns": [
+        {
+          "type": "stalker",
+          "x": 8,
+          "y": 10,
+          "patrol_dx": 3,
+          "patrol_dy": 0
+        },
+        {
+          "type": "spitter",
+          "x": 4.5,
+          "y": 19,
+          "patrol_dx": 0,
+          "patrol_dy": 5
+        },
+        {
+          "type": "brute",
+          "x": 11.5,
+          "y": 22,
+          "patrol_dx": -3,
+          "patrol_dy": 0
+        }
+      ],
+      "loot_spawns": [
+        {
+          "type": "medkit",
+          "x": 4,
+          "y": 15.5
+        },
+        {
+          "type": "rail_carbine",
+          "x": 12,
+          "y": 15.5
+        },
+        {
+          "type": "stim_injector",
+          "x": 8,
+          "y": 6.5
+        },
+        {
+          "type": "portable_turret",
+          "x": 8,
+          "y": 24.5
+        }
+      ],
+      "loot_count": 2
+    },
+    "reactor_hall": {
+      "id": "reactor_hall",
+      "name": "Reactor Core Cooling",
+      "grid_w": 2,
+      "grid_h": 2,
+      "width": 32,
+      "height": 32,
+      "theme": "reactor",
+      "role": "room",
+      "crate_spawn": {"x": 3.4, "y": 28.8, "locked": true},
+      "connector_ports": [
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "W"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "N"
+        },
+        {
+          "cell_x": 1,
+          "cell_y": 0,
+          "dir": "N"
+        },
+        {
+          "cell_x": 1,
+          "cell_y": 0,
+          "dir": "E"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 1,
+          "dir": "W"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 1,
+          "dir": "S"
+        },
+        {
+          "cell_x": 1,
+          "cell_y": 1,
+          "dir": "E"
+        },
+        {
+          "cell_x": 1,
+          "cell_y": 1,
+          "dir": "S"
+        }
+      ],
+      "interior_walls": [
+        {
+          "x": 13.5,
+          "y": 13.5,
+          "w": 5,
+          "h": 5,
+          "blocks_sight": true
+        },
+        {
+          "x": 5,
+          "y": 5,
+          "w": 2.5,
+          "h": 2.5,
+          "blocks_sight": true
+        },
+        {
+          "x": 24.5,
+          "y": 5,
+          "w": 2.5,
+          "h": 2.5,
+          "blocks_sight": true
+        },
+        {
+          "x": 5,
+          "y": 24.5,
+          "w": 2.5,
+          "h": 2.5,
+          "blocks_sight": true
+        },
+        {
+          "x": 24.5,
+          "y": 24.5,
+          "w": 2.5,
+          "h": 2.5,
+          "blocks_sight": true
+        }
+      ],
+      "puzzle_slots": [
+        {
+          "x": 11,
+          "y": 11,
+          "type": "power_reroute",
+          "label": "Stabilize Coolant Conduit Array"
+        },
+        {
+          "x": 21,
+          "y": 21,
+          "type": "signal_decrypt",
+          "label": "Unlock Reactor Bulkhead"
+        }
+      ],
+      "enemy_spawns": [
+        {
+          "type": "stalker",
+          "x": 9,
+          "y": 8,
+          "patrol_dx": 8,
+          "patrol_dy": 0
+        },
+        {
+          "type": "brute",
+          "x": 22,
+          "y": 16,
+          "patrol_dx": 0,
+          "patrol_dy": 6
+        },
+        {
+          "type": "spitter",
+          "x": 10,
+          "y": 23,
+          "patrol_dx": 8,
+          "patrol_dy": 0
+        }
+      ],
+      "loot_spawns": [
+        {
+          "type": "ammo_pack",
+          "x": 16,
+          "y": 10.5
+        },
+        {
+          "type": "credits",
+          "x": 16,
+          "y": 21.5
+        }
+      ],
+      "loot_count": 1
+    },
+    "command_hub": {
+      "id": "command_hub",
+      "name": "Central Command Nexus",
+      "grid_w": 2,
+      "grid_h": 1,
+      "width": 32,
+      "height": 16,
+      "theme": "command",
+      "role": "room",
+      "crate_spawn": {"x": 3.4, "y": 12.8, "locked": true},
+      "connector_ports": [
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "W"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "N"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "S"
+        },
+        {
+          "cell_x": 1,
+          "cell_y": 0,
+          "dir": "E"
+        },
+        {
+          "cell_x": 1,
+          "cell_y": 0,
+          "dir": "N"
+        },
+        {
+          "cell_x": 1,
+          "cell_y": 0,
+          "dir": "S"
+        }
+      ],
+      "interior_walls": [
+        {
+          "x": 5,
+          "y": 3.5,
+          "w": 2,
+          "h": 2,
+          "blocks_sight": true
+        },
+        {
+          "x": 5,
+          "y": 10.5,
+          "w": 2,
+          "h": 2,
+          "blocks_sight": true
+        },
+        {
+          "x": 14.5,
+          "y": 6,
+          "w": 3,
+          "h": 4,
+          "blocks_sight": false
+        },
+        {
+          "x": 24.5,
+          "y": 3.5,
+          "w": 2,
+          "h": 2,
+          "blocks_sight": true
+        },
+        {
+          "x": 24.5,
+          "y": 10.5,
+          "w": 2,
+          "h": 2,
+          "blocks_sight": true
+        }
+      ],
+      "puzzle_slots": [
+        {
+          "x": 19.5,
+          "y": 8,
+          "type": "signal_decrypt",
+          "label": "Transmit Extraction Beacon Telemetry"
+        },
+        {
+          "x": 11.5,
+          "y": 8,
+          "type": "power_reroute",
+          "label": "Unlock Command Airlock"
+        }
+      ],
+      "enemy_spawns": [
+        {
+          "type": "stalker",
+          "x": 10,
+          "y": 4.5,
+          "patrol_dx": 4,
+          "patrol_dy": 6
+        },
+        {
+          "type": "spitter",
+          "x": 21,
+          "y": 4.5,
+          "patrol_dx": 0,
+          "patrol_dy": 6
+        },
+        {
+          "type": "brute",
+          "x": 22,
+          "y": 11.5,
+          "patrol_dx": -4,
+          "patrol_dy": 0
+        }
+      ],
+      "loot_spawns": [
+        {
+          "type": "medkit",
+          "x": 16,
+          "y": 3.5
+        },
+        {
+          "type": "credits",
+          "x": 16,
+          "y": 12.5,
+          "variety": true
+        },
+        {
+          "type": "flare_revolver",
+          "x": 9.5,
+          "y": 8
+        },
+        {
+          "type": "heavy_ammo",
+          "x": 22.5,
+          "y": 8
+        }
+      ],
+      "loot_count": 2
+    },
+    "extraction_pad": {
+      "id": "extraction_pad",
+      "name": "Extraction Helipad",
+      "grid_w": 1,
+      "grid_h": 1,
+      "width": 16,
+      "height": 16,
+      "theme": "extraction",
+      "role": "end",
+      "connector_ports": [
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "W"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "N"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "S"
+        },
+        {
+          "cell_x": 0,
+          "cell_y": 0,
+          "dir": "E"
+        }
+      ],
+      "interior_walls": [
+        {
+          "x": 3,
+          "y": 3,
+          "w": 1.5,
+          "h": 2,
+          "blocks_sight": false
+        },
+        {
+          "x": 3,
+          "y": 11,
+          "w": 1.5,
+          "h": 2,
+          "blocks_sight": false
+        }
+      ],
+      "puzzle_slots": [],
+      "enemy_spawns": [
+        {
+          "type": "stalker",
+          "x": 11.5,
+          "y": 4,
+          "patrol_dx": 0,
+          "patrol_dy": 8
+        },
+        {
+          "type": "spitter",
+          "x": 12.5,
+          "y": 11.5,
+          "patrol_dx": 0,
+          "patrol_dy": -7
+        }
+      ],
+      "loot_spawns": [
+        {
+          "type": "ammo_pack",
+          "x": 12.5,
+          "y": 8
+        }
+      ],
+      "loot_count": 1
+    }
+  },
+  "loot_tables": {
+    "supply_crates": [
+      [
+        "plasma_lmg",
+        "medkit",
+        "ammo_pack"
+      ],
+      [
+        "rail_carbine",
+        "tactical_light",
+        "stim_injector"
+      ],
+      [
+        "portable_turret",
+        "machine_pistol",
+        "heavy_ammo"
+      ],
+      [
+        "flare_revolver",
+        "sonar_beacon",
+        "medkit"
+      ],
+      [
+        "tactical_light",
+        "portable_turret",
+        "isotope_cell"
+      ]
+    ],
+    "ground_variety": [
+      "medkit",
+      "ammo_pack",
+      "tactical_light",
+      "portable_turret",
+      "sonar_beacon",
+      "stim_injector",
+      "machine_pistol",
+      "credits"
+    ]
+  },
+  "sounds": {
+    "weapon_fire_shotgun": {
+      "category": "weapon_fire",
+      "asset": "audio/shotgun_fire.mp3",
+      "radius_min": 4,
+      "radius_max": 35,
+      "base_gain": 1,
+      "occlude": true,
+      "loop": false,
+      "duration": 0.3
+    },
+    "weapon_fire_pistol": {
+      "category": "weapon_fire",
+      "asset": "audio/pistol_fire.mp3",
+      "radius_min": 2.5,
+      "radius_max": 24,
+      "base_gain": 0.85,
+      "occlude": true,
+      "loop": false,
+      "duration": 0.2
+    },
+    "weapon_fire_machinegun": {
+      "category": "weapon_fire",
+      "asset": "audio/machinegun_fire.mp3",
+      "radius_min": 3,
+      "radius_max": 28,
+      "base_gain": 0.9,
+      "occlude": true,
+      "loop": false,
+      "duration": 0.15
+    },
+    "weapon_fire_plasma": {
+      "category": "weapon_fire",
+      "asset": "audio/plasma_gun_fire.mp3",
+      "radius_min": 3,
+      "radius_max": 30,
+      "base_gain": 0.95,
+      "occlude": true,
+      "loop": false,
+      "duration": 0.25
+    },
+    "weapon_reload_shotgun": {
+      "category": "weapon_reload",
+      "asset": "audio/shotgun_reload.mp3",
+      "radius_min": 1.5,
+      "radius_max": 12,
+      "base_gain": 0.65,
+      "occlude": true,
+      "loop": false,
+      "duration": 1.8
+    },
+    "weapon_reload_pistol": {
+      "category": "weapon_reload",
+      "asset": "audio/pistol_reload.mp3",
+      "radius_min": 1.5,
+      "radius_max": 12,
+      "base_gain": 0.65,
+      "occlude": true,
+      "loop": false,
+      "duration": 1.8
+    },
+    "weapon_reload_machinegun": {
+      "category": "weapon_reload",
+      "asset": "audio/machinegun_reload.mp3",
+      "radius_min": 1.5,
+      "radius_max": 12,
+      "base_gain": 0.65,
+      "occlude": true,
+      "loop": false,
+      "duration": 1.8
+    },
+    "weapon_reload_plasma": {
+      "category": "weapon_reload",
+      "asset": "audio/plasma_gun_reload.mp3",
+      "radius_min": 1.5,
+      "radius_max": 12,
+      "base_gain": 0.65,
+      "occlude": true,
+      "loop": false,
+      "duration": 1.8
+    },
+    "door_operate": {
+      "category": "door_operate",
+      "asset": "audio/door_operate.mp3",
+      "radius_min": 2,
+      "radius_max": 18,
+      "base_gain": 0.7,
+      "occlude": true,
+      "loop": false,
+      "duration": 1.2
+    },
+    "alien_attack": {
+      "category": "alien_attack",
+      "asset": "audio/alien_attack.mp3",
+      "radius_min": 2.5,
+      "radius_max": 22,
+      "base_gain": 0.85,
+      "occlude": true,
+      "loop": false,
+      "duration": 0.6
+    },
+    "alien_death": {
+      "category": "alien_death",
+      "asset": "audio/alien_death.mp3",
+      "radius_min": 2.5,
+      "radius_max": 22,
+      "base_gain": 0.85,
+      "occlude": true,
+      "loop": false,
+      "duration": 0.9
+    },
+    "player_footstep": {
+      "category": "player_footstep",
+      "asset": "audio/player_footstep.mp3",
+      "radius_min": 1,
+      "radius_max": 8,
+      "base_gain": 0.4,
+      "occlude": true,
+      "loop": false,
+      "duration": 0.3
+    },
+    "ambient_vent": {
+      "category": "ambient_vent",
+      "asset": "audio/ambient_vent.mp3",
+      "radius_min": 2,
+      "radius_max": 16,
+      "base_gain": 0.5,
+      "occlude": true,
+      "loop": true,
+      "duration": null
+    },
+    "extraction_countdown": {
+      "category": "extraction_countdown",
+      "asset": "audio/extraction_countdown.mp3",
+      "radius_min": 8,
+      "radius_max": 50,
+      "base_gain": 1,
+      "occlude": false,
+      "loop": false,
+      "duration": null
+    }
+  },
+  "music": {
+    "bpm": 118,
+    "tracks": {
+      "explore": "audio/music_explore.mp3",
+      "combat": "audio/music_combat.mp3"
+    }
+  },
+  "rules": {
+    "audio": {
+      "history_duration": 0.75,
+      "history_limit": 256,
+      "door_sound": "door_operate",
+      "alien_attack_sound": "alien_attack",
+      "alien_death_sound": "alien_death",
+      "asset_retry_interval": 2,
+      "music_crossfade_duration": 1.2,
+      "occlusion_cache_limit": 2048,
+      "material_penalties": {"solid": 1.5, "door": 1, "transparent": 0},
+      "occlusion_tiers": [[0, 1, 20000], [1, 0.45, 1800], [2, 0.22, 900], [3.5, 0.09, 550]],
+      "occlusion_fallback_gain": 0.03,
+      "occlusion_fallback_cutoff": 350
+    },
+    "combat": {
+      "factions": {
+        "squad": {"squad": "ally", "swarm": "hostile"},
+        "swarm": {"squad": "hostile", "swarm": "ally"}
+      },
+      "friendly_fire": false,
+      "self_damage": false
+    },
+    "geometry": {
+      "cell_size": 16,
+      "connector_offset": 6,
+      "connector_width": 4,
+      "wall_thickness": 0.8
+    },
+    "timing": {
+      "tick_rate": 30,
+      "max_catchup": 5,
+      "prep_countdown": 5,
+      "dropship_countdown": 2.5,
+      "input_timeout": 1,
+      "sound_ring_duration": 0.45
+    },
+    "player": {
+      "radius": 0.42,
+      "projectile_radius": 0.16,
+      "projectile_offset": 0.5,
+      "sprint_forward_dot": 0.2,
+      "walk_footstep_interval": 0.52,
+      "run_footstep_interval": 0.28,
+      "walk_noise_multiplier": 0.5,
+      "run_noise_multiplier": 2.2,
+      "footstep_sound": "player_footstep",
+      "reload_sound_radius": 12,
+      "vanguard_melee_multiplier": 0.8,
+      "vanguard_melee_minimum": 1
+    },
+    "interaction": {
+      "revive_radius": 2.2,
+      "revive_fraction": 0.5,
+      "interact_radius": 3.5,
+      "pickup_radius": 3.8,
+      "puzzle_radius": 2.8,
+      "crate_radius": 2.4,
+      "ground_item_radius": 2,
+      "alarm_radius": 14
+    },
+    "ai": {
+      "hearing_alert_duration": 6,
+      "engaged_alert_duration": 8,
+      "ally_alert_radius": 4.5,
+      "ally_alert_duration": 5,
+      "proximity_radius": 2.2,
+      "lost_target_speed_multiplier": 0.85,
+      "investigate_speed_multiplier": 0.75,
+      "lost_target_reach": 0.4,
+      "investigate_reach": 0.45,
+      "waypoint_reach": 0.35,
+      "projectile_ttl": 1.6,
+      "projectile_radius": 0.22,
+      "projectile_offset": 0.6,
+      "projectile_color": "#2ECC71"
+    }
+  }
+}

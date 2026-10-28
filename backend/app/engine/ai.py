@@ -5,8 +5,9 @@ Enemy sensory perception (sight & hearing) and state-machine AI.
 from __future__ import annotations
 
 import math
-import uuid
-from backend.app.config.classes import ENEMY_TYPES
+from backend.app.content import CATALOG, RULES
+from backend.app.engine.attacks import profiles, perform
+from backend.app.engine.combat import allied, apply_damage, can_target
 from backend.app.engine.physics import move_with_collisions, has_line_of_sight
 
 
@@ -21,6 +22,11 @@ def update_enemies(
     sound_events: list[dict],
     projectiles: list[dict],
     dt: float,
+    *,
+    damage=apply_damage,
+    combat_rules=RULES["combat"],
+    emit_sound=None,
+    catalog=CATALOG,
 ) -> None:
     """
     Updates enemy perception (hearing sound events, checking sight cones & LoS)
@@ -31,10 +37,11 @@ def update_enemies(
     ]
 
     for enemy in enemies:
+        e_cfg = catalog.definitions["enemies"][enemy["type"]]
+        available = profiles(enemy, e_cfg, catalog=catalog)
         if enemy.get("hp", 0) <= 0:
             continue
 
-        e_cfg = ENEMY_TYPES.get(enemy["type"], ENEMY_TYPES["stalker"])
         ex = float(enemy["x"])
         ey = float(enemy["y"])
 
@@ -42,17 +49,17 @@ def update_enemies(
             enemy["attack_timer"] = max(0.0, enemy["attack_timer"] - dt)
 
         # 1. Hearing check against recent sound pulses
-        hearing_mult = float(e_cfg.get("hearing_multiplier", 1.0))
+        hearing_mult = float(e_cfg["hearing_multiplier"])
         for snd in sound_events:
             dist_snd = math.hypot(snd["x"] - ex, snd["y"] - ey)
             if dist_snd <= float(snd["radius"]) * hearing_mult:
                 if enemy["state"] == "patrol":
                     enemy["state"] = "alerted"
                     enemy["investigate_target"] = (float(snd["x"]), float(snd["y"]))
-                    enemy["alert_timer"] = 6.0
+                    enemy["alert_timer"] = RULES["ai"]["hearing_alert_duration"]
                 elif enemy["state"] == "alerted":
                     enemy["investigate_target"] = (float(snd["x"]), float(snd["y"]))
-                    enemy["alert_timer"] = max(float(enemy.get("alert_timer", 0.0)), 6.0)
+                    enemy["alert_timer"] = max(float(enemy.get("alert_timer", 0.0)), RULES["ai"]["hearing_alert_duration"])
 
         # 2. Sight check (vision cone + proximity + wall raycast)
         best_player = None
@@ -61,6 +68,8 @@ def update_enemies(
         half_fov = float(e_cfg["sight_angle"]) * 0.5
 
         for p in living_players:
+            if not can_target(enemy, p, rules=combat_rules, hostile_only=True):
+                continue
             px, py = float(p["x"]), float(p["y"])
             dist = math.hypot(px - ex, py - ey)
             if dist > sight_range:
@@ -68,7 +77,7 @@ def update_enemies(
 
             ang_to_p = math.atan2(py - ey, px - ex)
             in_cone = abs(_angle_diff(float(enemy["angle"]), ang_to_p)) <= half_fov
-            in_proximity = dist <= 2.2
+            in_proximity = dist <= RULES["ai"]["proximity_radius"]
 
             if (in_cone or in_proximity) and has_line_of_sight(ex, ey, px, py, walls):
                 if dist < best_dist:
@@ -79,14 +88,14 @@ def update_enemies(
             enemy["state"] = "engaged"
             enemy["target_player_id"] = best_player["id"]
             enemy["investigate_target"] = (float(best_player["x"]), float(best_player["y"]))
-            enemy["alert_timer"] = 8.0
+            enemy["alert_timer"] = RULES["ai"]["engaged_alert_duration"]
             # Alert nearby squadmates within 4.5 units
             for ally in enemies:
-                if ally["id"] != enemy["id"] and ally.get("hp", 0) > 0 and ally["state"] == "patrol":
-                    if math.hypot(ally["x"] - ex, ally["y"] - ey) <= 4.5:
+                if ally["id"] != enemy["id"] and ally.get("hp", 0) > 0 and ally["state"] == "patrol" and allied(enemy, ally, combat_rules):
+                    if math.hypot(ally["x"] - ex, ally["y"] - ey) <= RULES["ai"]["ally_alert_radius"]:
                         ally["state"] = "alerted"
                         ally["investigate_target"] = (float(best_player["x"]), float(best_player["y"]))
-                        ally["alert_timer"] = 5.0
+                        ally["alert_timer"] = RULES["ai"]["ally_alert_duration"]
 
         # 3. State execution
         state = enemy["state"]
@@ -95,42 +104,7 @@ def update_enemies(
                 tx, ty = float(best_player["x"]), float(best_player["y"])
                 dist = best_dist
                 enemy["angle"] = math.atan2(ty - ey, tx - ex)
-                attack_range = float(e_cfg["attack_range"])
-
-                if dist <= attack_range:
-                    # Perform attack
-                    if enemy["attack_timer"] <= 0.0:
-                        enemy["attack_timer"] = float(e_cfg["attack_cooldown"])
-                        proj_speed = float(e_cfg.get("projectile_speed", 0.0))
-                        dmg = int(e_cfg["attack_damage"])
-                        if proj_speed <= 0.0:
-                            # Melee strike (check Vanguard shield reduction)
-                            if best_player.get("skill_active") == "shockwave_shield":
-                                dmg = max(2, int(dmg * 0.25))
-                            elif best_player.get("class_id") == "vanguard":
-                                dmg = max(1, int(dmg * 0.8))
-                            best_player["hp"] = max(0, best_player["hp"] - dmg)
-                            if best_player["hp"] == 0:
-                                best_player["downed"] = True
-                        else:
-                            # Ranged acid/plasma projectile
-                            ang = enemy["angle"]
-                            projectiles.append(
-                                {
-                                    "id": uuid.uuid4().hex[:8],
-                                    "owner_id": enemy["id"],
-                                    "team": "enemy",
-                                    "x": ex + math.cos(ang) * 0.6,
-                                    "y": ey + math.sin(ang) * 0.6,
-                                    "vx": math.cos(ang) * proj_speed,
-                                    "vy": math.sin(ang) * proj_speed,
-                                    "damage": dmg,
-                                    "ttl": 1.6,
-                                    "color": "#2ECC71",
-                                    "radius": 0.22,
-                                }
-                            )
-                else:
+                if not perform(enemy, best_player, available, dist, projectiles, damage, emit_sound):
                     # Chase player
                     spd = float(e_cfg["speed"])
                     vx = math.cos(enemy["angle"]) * spd
@@ -147,10 +121,10 @@ def update_enemies(
                     tx, ty = enemy["investigate_target"]
                     dx, dy = tx - ex, ty - ey
                     dist = math.hypot(dx, dy)
-                    if dist > 0.4:
+                    if dist > RULES["ai"]["lost_target_reach"]:
                         ang = math.atan2(dy, dx)
                         enemy["angle"] = ang
-                        spd = float(e_cfg["speed"]) * 0.85
+                        spd = float(e_cfg["speed"]) * RULES["ai"]["lost_target_speed_multiplier"]
                         nx, ny = move_with_collisions(
                             ex, ey, math.cos(ang) * spd, math.sin(ang) * spd, dt, float(enemy["radius"]), walls
                         )
@@ -168,10 +142,10 @@ def update_enemies(
                 tx, ty = target
                 dx, dy = tx - ex, ty - ey
                 dist = math.hypot(dx, dy)
-                if dist > 0.45:
+                if dist > RULES["ai"]["investigate_reach"]:
                     ang = math.atan2(dy, dx)
                     enemy["angle"] = ang
-                    spd = float(e_cfg["speed"]) * 0.75
+                    spd = float(e_cfg["speed"]) * RULES["ai"]["investigate_speed_multiplier"]
                     nx, ny = move_with_collisions(
                         ex, ey, math.cos(ang) * spd, math.sin(ang) * spd, dt, float(enemy["radius"]), walls
                     )
@@ -184,7 +158,7 @@ def update_enemies(
             tx, ty = waypoints[wp_idx]
             dx, dy = tx - ex, ty - ey
             dist = math.hypot(dx, dy)
-            if dist <= 0.35:
+            if dist <= RULES["ai"]["waypoint_reach"]:
                 enemy["waypoint_index"] = (wp_idx + 1) % len(waypoints)
             else:
                 ang = math.atan2(dy, dx)

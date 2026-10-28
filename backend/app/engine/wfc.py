@@ -4,9 +4,23 @@ from math import log
 from random import Random
 
 from backend.app.config.missions import MISSIONS, SEGMENT_TEMPLATES
+from backend.app.content import CATALOG
 
 DIRS = {"N": (0, -1, "S"), "S": (0, 1, "N"), "E": (1, 0, "W"), "W": (-1, 0, "E")}
 EMPTY = "EMPTY"
+GENERATOR_VERSION = "wfc-2"
+MAX_ATTEMPTS = 400
+
+
+class GenerationError(RuntimeError):
+    def __init__(self, mission_id, requested_seed, diagnostics):
+        self.diagnostics = diagnostics
+        super().__init__(f"Generation failed for {mission_id}, requested seed {requested_seed}, "
+                         f"{len(diagnostics)} bounded attempts: {diagnostics[-5:]}")
+
+
+def _placement_key(placement):
+    return (*placement[:3], tuple(sorted(placement[3])))
 
 
 def _footprint(pl):
@@ -58,7 +72,7 @@ def _assign(pl, domains, assigned):
         if cell in assigned and assigned[cell] != pl:
             return False
     # Remove any candidate in other cells whose footprint overlaps `fp`
-    touched = list(fp)
+    touched = sorted(fp)
     for cell, dom in list(domains.items()):
         if cell in fp:
             assigned[cell] = pl
@@ -83,10 +97,10 @@ def _valid_placements(tid, ax, ay, gw, gh):
             in_bounds_ports.append((p["cell_x"], p["cell_y"], d))
     if not in_bounds_ports:
         return []
-    if tid in ("drop_hangar", "extraction_pad"):
+    if t["role"] in ("start", "end"):
         sizes = [1, 2]
     else:
-        sizes = [2, 3]
+        sizes = [1, 2, 3]
     res = []
     for k in sizes:
         if k <= len(in_bounds_ports):
@@ -95,11 +109,18 @@ def _valid_placements(tid, ax, ay, gw, gh):
     return res
 
 
-def _try_seed(mission_id, seed):
-    mission = MISSIONS.get(mission_id, MISSIONS["outpost"])
+def _try_seed(mission_id, seed, diagnostics=None):
+    mission = MISSIONS[mission_id]
     rng = Random(seed)
     gw, gh = mission["grid_w"], mission["grid_h"]
-    allowed = [t for t in mission["allowed_templates"] if t not in ("drop_hangar", "extraction_pad")]
+    def reject(reason):
+        if diagnostics is not None:
+            diagnostics.append({"seed": seed, "reason": reason})
+        return None
+
+    allowed = sorted(t for t in mission["allowed_templates"] if SEGMENT_TEMPLATES[t]["role"] == "room")
+    start_tid = next(t for t in mission["allowed_templates"] if SEGMENT_TEMPLATES[t]["role"] == "start")
+    end_tid = next(t for t in mission["allowed_templates"] if SEGMENT_TEMPLATES[t]["role"] == "end")
     domains = {(x, y): set() for x in range(gw) for y in range(gh)}
 
     for tid in allowed:
@@ -113,10 +134,11 @@ def _try_seed(mission_id, seed):
         domains[cell].add((EMPTY, cell[0], cell[1], frozenset()))
 
     assigned = {}
-    start_cands = _valid_placements("drop_hangar", 0, rng.randrange(gh), gw, gh)
-    end_cands = _valid_placements("extraction_pad", gw - 1, rng.randrange(gh), gw, gh)
+    start_tpl, end_tpl = SEGMENT_TEMPLATES[start_tid], SEGMENT_TEMPLATES[end_tid]
+    start_cands = _valid_placements(start_tid, 0, rng.randrange(gh - start_tpl["grid_h"] + 1), gw, gh)
+    end_cands = _valid_placements(end_tid, gw - end_tpl["grid_w"], rng.randrange(gh - end_tpl["grid_h"] + 1), gw, gh)
     if not start_cands or not end_cands:
-        return None
+        return reject("no endpoint placements")
     start = rng.choice([c for c in start_cands if len(c[3]) == 1] or start_cands)
     end = rng.choice([c for c in end_cands if len(c[3]) == 1] or end_cands)
     for cell in _footprint(start):
@@ -125,7 +147,7 @@ def _try_seed(mission_id, seed):
         domains[cell].add(end)
 
     if not _assign(start, domains, assigned) or not _assign(end, domains, assigned):
-        return None
+        return reject("endpoint contradiction")
     placed = [start, end]
 
     while True:
@@ -150,17 +172,18 @@ def _try_seed(mission_id, seed):
         if best_cell is None or len(placed) >= mission["max_segments"]:
             break
 
-        cands = [p for p in domains[best_cell] if p[0] != EMPTY]
+        cands = sorted((p for p in domains[best_cell] if p[0] != EMPTY), key=_placement_key)
         if not cands:
             break
         # Prefer multi-cell segments when we haven't placed enough yet
         weights = [
-            3.0 if SEGMENT_TEMPLATES[p[0]]["grid_w"] * SEGMENT_TEMPLATES[p[0]]["grid_h"] > 1 else 1.0
+            (3.0 if SEGMENT_TEMPLATES[p[0]]["grid_w"] * SEGMENT_TEMPLATES[p[0]]["grid_h"] > 1 else 1.0)
+            * (4.0 if p[0] in set(mission["required_templates"]) - {pl[0] for pl in placed} else 1.0)
             for p in cands
         ]
         choice = rng.choices(cands, weights=weights, k=1)[0]
         if not _assign(choice, domains, assigned):
-            return None
+            return reject("placement contradiction")
         placed.append(choice)
 
     # Collapse any remaining unassigned cells to EMPTY if possible
@@ -170,9 +193,9 @@ def _try_seed(mission_id, seed):
             if emp in domains[cell] and _assign(emp, domains, assigned):
                 pass
             else:
-                cands = list(domains[cell])
+                cands = sorted(domains[cell], key=_placement_key)
                 if not cands or not _assign(rng.choice(cands), domains, assigned):
-                    return None
+                    return reject("remaining-cell contradiction")
                 if assigned[cell][0] != EMPTY and assigned[cell] not in placed:
                     placed.append(assigned[cell])
 
@@ -201,10 +224,14 @@ def _try_seed(mission_id, seed):
                 bfs_order.append(v)
                 q.append(v)
 
-    if end_i not in parent or len(bfs_order) < mission["min_segments"]:
-        return None
+    if end_i not in parent or len(bfs_order) != len(placed):
+        return reject("disconnected final layout")
+    if not mission["min_segments"] <= len(placed) <= mission["max_segments"]:
+        return reject(f"final segment count {len(placed)} outside {mission['min_segments']}..{mission['max_segments']}")
+    if not set(mission["required_templates"]).issubset(p[0] for p in placed):
+        return reject("missing required templates")
 
-    # Order connected segments so start is 0 and extraction_pad is last (-1)
+    # Preserve display ordering while exposing authoritative role indices.
     mid_indices = [i for i in bfs_order if i not in (start_i, end_i)]
     ordered_old = [start_i] + mid_indices + [end_i]
     remap = {old_i: new_i for new_i, old_i in enumerate(ordered_old)}
@@ -215,7 +242,7 @@ def _try_seed(mission_id, seed):
         for old_i in ordered_old
     }
     if len(sizes) < 2:
-        return None
+        return reject("requires multiple segment sizes")
 
     connectors = []
     for old_v in ordered_old:
@@ -240,6 +267,7 @@ def _try_seed(mission_id, seed):
         seg_list.append(
             {
                 "id": tid,
+                "role": SEGMENT_TEMPLATES[tid]["role"],
                 "index": new_i,
                 "ax": ax,
                 "ay": ay,
@@ -250,6 +278,9 @@ def _try_seed(mission_id, seed):
     return {
         "mission_id": mission_id,
         "seed": seed,
+        "resolved_seed": seed,
+        "start_segment_index": remap[start_i],
+        "end_segment_index": remap[end_i],
         "grid_w": gw,
         "grid_h": gh,
         "segments": seg_list,
@@ -257,9 +288,17 @@ def _try_seed(mission_id, seed):
     }
 
 
-def run_wfc(mission_id: str, seed: int = 42) -> dict:
-    for attempt in range(400):
-        result = _try_seed(mission_id, seed + attempt * 17)
+def run_wfc(mission_id: str, seed: int = 42, *, max_attempts: int = MAX_ATTEMPTS) -> dict:
+    if mission_id not in MISSIONS or type(seed) is not int:
+        raise ValueError("Known mission and integer seed required")
+    if not 1 <= max_attempts <= MAX_ATTEMPTS:
+        raise ValueError("Invalid generation attempt bound")
+    diagnostics = []
+    for attempt in range(max_attempts):
+        result = _try_seed(mission_id, seed + attempt * 17, diagnostics)
         if result:
+            result.update(requested_seed=seed, generator_version=GENERATOR_VERSION,
+                          content_version=CATALOG.definitions["content_version"],
+                          generation_diagnostics=diagnostics, generation_attempts=attempt + 1)
             return result
-    raise RuntimeError(f"WFC failed to converge for mission {mission_id}")
+    raise GenerationError(mission_id, seed, diagnostics)

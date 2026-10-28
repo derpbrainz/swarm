@@ -1,0 +1,9 @@
+{
+  "placements": [
+    {"id": "chair_a", "archetype": "chair", "x": 8, "y": 10, "orientation": 90},
+    {"id": "table_a", "archetype": "table", "x": 10, "y": 12, "orientation": 0},
+    {"id": "console_a", "archetype": "console", "x": 12, "y": 10, "orientation": 0}
+  ],
+  "console_visual": "test_detail",
+  "floor_material": "test_tiles"
+}

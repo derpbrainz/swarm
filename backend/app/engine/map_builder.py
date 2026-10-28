@@ -9,11 +9,14 @@ import random
 
 from backend.app.config.classes import ENEMY_TYPES
 from backend.app.config.items import make_item
+from backend.app.content import CATALOG, RULES, mutable_copy
 from backend.app.config.missions import CELL_SIZE, CONNECTOR_OFFSET, CONNECTOR_WIDTH, MISSIONS, SEGMENT_TEMPLATES
-from backend.app.engine.physics import circle_vs_aabb, point_in_rect
-from backend.app.engine.wfc import DIRS, run_wfc
+from backend.app.engine.physics import collision_path_clear, point_in_rect
+from backend.app.engine.props import instantiate_props, world_surfaces
+from backend.app.engine.puzzles import generate as generate_puzzle
+from backend.app.engine.wfc import DIRS, GENERATOR_VERSION, MAX_ATTEMPTS, GenerationError, _try_seed, run_wfc
 
-WALL_THICKNESS = 0.8
+WALL_THICKNESS = RULES["geometry"]["wall_thickness"]
 
 # Distinct high-contrast colors matching doors to their unlocking security consoles
 DOOR_PALETTE = [
@@ -30,17 +33,16 @@ DOOR_PALETTE = [
 def astar_wire_path(start: tuple[float, float], goal: tuple[float, float], segments: list[dict], walls: list[dict], ignore_wall_ids: set[str]) -> list[tuple[float, float]]:
     res = 0.5
     sx, sy = round(start[0] / res) * res, round(start[1] / res) * res
-    gx, gy = round(goal[0] / res) * res, round(goal[1] / res) * res
+
+    blocking = [w for w in walls if w.get("active", True) and w.get("blocks_movement", True) and w.get("id") not in ignore_wall_ids]
 
     def is_blocked(x: float, y: float) -> bool:
         if not any(point_in_rect(x, y, s) for s in segments):
             return True
-        for w in walls:
-            if not w.get("active", True) or w.get("id") in ignore_wall_ids:
-                continue
-            if circle_vs_aabb(x, y, 0.22, w)[2]:
-                return True
-        return False
+        return not collision_path_clear((x, y), (x, y), 0.22, blocking)
+
+    if is_blocked(sx, sy) or not collision_path_clear(start, (sx, sy), 0.22, blocking):
+        raise ValueError(f"Wire start blocked at {start}")
 
     open_set = []
     heapq.heappush(open_set, (0.0, 0.0, (sx, sy)))
@@ -49,43 +51,43 @@ def astar_wire_path(start: tuple[float, float], goal: tuple[float, float], segme
 
     while open_set:
         _, current_g, current = heapq.heappop(open_set)
-        if math.hypot(current[0] - gx, current[1] - gy) <= res:
+        if math.hypot(current[0] - goal[0], current[1] - goal[1]) <= res * 2 and collision_path_clear(current, goal, 0.22, blocking):
             path = [current]
             while current in came_from:
                 current = came_from[current]
                 path.append(current)
             path.reverse()
-            path.append((gx, gy))
+            path.insert(0, start)
+            path.append(goal)
             return path
 
         for dx, dy in [(res, 0), (-res, 0), (0, res), (0, -res), (res, res), (-res, res), (res, -res), (-res, -res)]:
             nx, ny = round((current[0] + dx) / res) * res, round((current[1] + dy) / res) * res
-            if is_blocked(nx, ny):
+            if is_blocked(nx, ny) or not collision_path_clear(current, (nx, ny), 0.22, blocking):
                 continue
             step_cost = math.hypot(dx, dy)
             tentative_g = current_g + step_cost
             if tentative_g < g_score.get((nx, ny), float("inf")):
                 came_from[(nx, ny)] = current
                 g_score[(nx, ny)] = tentative_g
-                h = math.hypot(nx - gx, ny - gy)
+                h = math.hypot(nx - goal[0], ny - goal[1])
                 heapq.heappush(open_set, (tentative_g + h, tentative_g, (nx, ny)))
 
-    return [(sx, sy), (gx, gy)]
+    raise ValueError(f"No collision-free wire route from {start} to {goal}")
 
 
-def generate_puzzle_data(puzzle_type: str, seed_idx: int = 0) -> dict:
-    rng = random.Random(100 + seed_idx * 37)
-    if puzzle_type == "power_reroute":
-        return {"type": puzzle_type, "nodes": [rng.choice([1, 2, 3]) for _ in range(4)], "target": [0, 0, 0, 0]}
-    symbols = ["A7", "C4", "F9", "E2", "B5", "D8"]
-    return {"type": puzzle_type, "target_sequence": [rng.choice(symbols) for _ in range(4)], "progress": 0, "options": symbols}
+def generate_puzzle_data(puzzle_type: str, seed_idx: int = 0, *, rng: random.Random | None = None, catalog=None) -> dict:
+    rng = rng if rng is not None else random.Random(100 + seed_idx * 37)
+    return generate_puzzle(puzzle_type, rng=rng, catalog=catalog if catalog is not None else CATALOG)
 
 
-def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
-    wfc = run_wfc(mission_id, seed)
-    mission = MISSIONS.get(mission_id, MISSIONS["outpost"])
-    enemy_mult = float(mission.get("enemy_multiplier", 1.0))
+def build_wfc_map(mission_id: str, seed: int = 42, *, layout: dict | None = None) -> dict:
+    wfc = layout if layout is not None else run_wfc(mission_id, seed)
+    rng = random.Random(wfc["seed"])
+    mission = MISSIONS[mission_id]
+    enemy_mult = float(mission["enemy_multiplier"])
     segments, walls, puzzles, enemies, loot, connectors_out = [], [], [], [], [], []
+    ambience_emitters = []
     connector_edges = set()
     for c in wfc["connectors"]:
         connector_edges.add((c["gx"], c["gy"], c["dir"]))
@@ -96,6 +98,7 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
         seg_obj = {
             "index": seg["index"],
             "id": seg["id"],
+            "role": tpl["role"],
             "name": tpl["name"],
             "theme": tpl.get("theme", "industrial"),
             "x": seg["ax"] * CELL_SIZE,
@@ -109,8 +112,11 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
             "cells": [list(c) for c in seg["cells"]],
         }
         segments.append(seg_obj)
+        for emitter in tpl["ambience_emitters"]:
+            ambience_emitters.append({**dict(emitter), "id": f"ambience_{seg['index']}_{emitter['id']}",
+                                     "x": seg_obj["x"] + emitter["x"], "y": seg_obj["y"] + emitter["y"]})
 
-    seg0 = segments[0]
+    seg0 = segments[wfc["start_segment_index"]]
     ship = {
         "x": seg0["x"] + 1.6,
         "y": seg0["y"] + 5.0,
@@ -132,13 +138,13 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
         {"id": "spaceship_ramp", "x": ship["x"] + ship["w"] - 0.5, "y": ship["y"] + 0.5, "w": 0.5, "h": ship["h"] - 1.0, "active": True, "blocks_sight": False, "type": "ship_ramp"},
     ])
 
-    end_seg = segments[-1]
+    end_seg = segments[wfc["end_segment_index"]]
     extraction_zone = {"x": end_seg["x"] + 5.5, "y": end_seg["y"] + 5.0, "w": 5.0, "h": 6.0, "active": False}
 
     # Perimeter walls around all non-connector external cell edges of each segment
     for seg in segments:
         cells = {tuple(c) for c in seg["cells"]}
-        for gx, gy in cells:
+        for gx, gy in sorted(cells):
             for d, (dx, dy, opp) in DIRS.items():
                 nb = (gx + dx, gy + dy)
                 if nb in cells or (gx, gy, d) in connector_edges or (nb[0], nb[1], opp) in connector_edges:
@@ -153,6 +159,16 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
                 else:
                     walls.append({"id": f"wall_{gx}_{gy}_E", "x": x + CELL_SIZE - WALL_THICKNESS, "y": y, "w": WALL_THICKNESS, "h": CELL_SIZE, "active": True, "blocks_sight": True, "type": "wall"})
 
+    # All blocking interiors/cover exist before any decoration is routed.
+    for seg in segments:
+        for w_idx, iw in enumerate(SEGMENT_TEMPLATES[seg["id"]]["interior_walls"]):
+            walls.append({"id": f"wall_{seg['index']}_int_{w_idx}",
+                          "x": seg["x"] + iw["x"], "y": seg["y"] + iw["y"],
+                          "w": iw["w"], "h": iw["h"],
+                          "blocks_sight": iw["blocks_sight"],
+                          "is_door": iw["is_door"], "material": iw["material"], "active": iw["active"],
+                          "type": "wall" if iw["blocks_sight"] else "cover"})
+
     # Connectors (flat grid-aligned doorways) and upstream button/puzzle terminals
     used_slots = {seg["index"]: set() for seg in segments}
     for c_idx, c in enumerate(wfc["connectors"]):
@@ -162,19 +178,19 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
         if d in ("E", "W"):
             bx = x + CELL_SIZE if d == "E" else x
             wall_x = bx - WALL_THICKNESS * 0.5
-            door_center = (bx, y + 8.0)
+            door_center = (bx, y + CELL_SIZE * 0.5)
             for t in (0.0, CONNECTOR_OFFSET + CONNECTOR_WIDTH):
                 walls.append({"id": f"flank_{c_idx}_{int(t)}", "x": wall_x, "y": y + t, "w": WALL_THICKNESS, "h": CONNECTOR_OFFSET, "active": True, "blocks_sight": True, "type": "wall"})
             door_color_info = DOOR_PALETTE[c_idx % len(DOOR_PALETTE)]
-            walls.append({"id": door_id, "x": bx - 0.4, "y": y + CONNECTOR_OFFSET, "w": 0.8, "h": CONNECTOR_WIDTH, "active": True, "blocks_sight": True, "type": "door", "color": door_color_info["color"], "color_name": door_color_info["name"]})
+            walls.append({"id": door_id, "x": bx - WALL_THICKNESS * 0.5, "y": y + CONNECTOR_OFFSET, "w": WALL_THICKNESS, "h": CONNECTOR_WIDTH, "active": True, "blocks_sight": True, "type": "door", "color": door_color_info["color"], "color_name": door_color_info["name"]})
         else:
             by = y + CELL_SIZE if d == "S" else y
             wall_y = by - WALL_THICKNESS * 0.5
-            door_center = (x + 8.0, by)
+            door_center = (x + CELL_SIZE * 0.5, by)
             for t in (0.0, CONNECTOR_OFFSET + CONNECTOR_WIDTH):
                 walls.append({"id": f"flank_{c_idx}_{int(t)}", "x": x + t, "y": wall_y, "w": CONNECTOR_OFFSET, "h": WALL_THICKNESS, "active": True, "blocks_sight": True, "type": "wall"})
             door_color_info = DOOR_PALETTE[c_idx % len(DOOR_PALETTE)]
-            walls.append({"id": door_id, "x": x + CONNECTOR_OFFSET, "y": by - 0.4, "w": CONNECTOR_WIDTH, "h": 0.8, "active": True, "blocks_sight": True, "type": "door", "color": door_color_info["color"], "color_name": door_color_info["name"]})
+            walls.append({"id": door_id, "x": x + CONNECTOR_OFFSET, "y": by - WALL_THICKNESS * 0.5, "w": CONNECTOR_WIDTH, "h": WALL_THICKNESS, "active": True, "blocks_sight": True, "type": "door", "color": door_color_info["color"], "color_name": door_color_info["name"]})
 
         from_seg = segments[c["from_seg"]]
         to_seg = segments[c["to_seg"]]
@@ -198,17 +214,19 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
         puzzles.append({
             "id": puzzle_id,
             "type": ptype,
+            "definition_id": ptype,
+            "definition": mutable_copy(CATALOG.definitions["puzzles"][ptype]),
             "label": plabel,
             "x": round(px, 2),
             "y": round(py, 2),
-            "radius": 2.8,
+            "radius": RULES["interaction"]["puzzle_radius"],
             "solved": False,
             "door_id": door_id,
             "color": door_color_info["color"],
             "color_name": door_color_info["name"],
             "segment_index": from_seg["index"],
             "target_segment_index": to_seg["index"],
-            "data": generate_puzzle_data(ptype, c_idx + wfc["seed"]),
+            "data": generate_puzzle_data(ptype, rng=rng),
         })
         connectors_out.append({
             "id": f"conn_{c_idx}",
@@ -224,6 +242,14 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
         })
 
 
+    props, prop_puzzles = [], []
+    for seg in segments:
+        instances, targets = instantiate_props(SEGMENT_TEMPLATES[seg["id"]]["props"],
+                                              x=seg["x"], y=seg["y"], prefix=f"prop_{seg['index']}_")
+        props.extend(instances)
+        prop_puzzles.extend(targets)
+    routing_surfaces = world_surfaces({"walls": walls, "props": props})
+
     # Compute trailing floor wires from puzzle console to the side of the door using A*
     wires = []
     for pz in puzzles:
@@ -236,7 +262,7 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
                 door_side = (door_wall["x"] + 0.35, door_wall["y"] + door_wall["h"] * 0.5)
             else:
                 door_side = (door_wall["x"] + door_wall["w"] * 0.5, door_wall["y"] + 0.35)
-            path = astar_wire_path((pz["x"], pz["y"]), door_side, segments, walls, ignore_ids)
+            path = astar_wire_path((pz["x"], pz["y"]), door_side, segments, routing_surfaces, ignore_ids)
             wires.append({
                 "puzzle_id": pz["id"],
                 "door_id": d_id,
@@ -244,34 +270,16 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
                 "path": path,
             })
 
-    # Interior walls, enemies, loot, and skill-check supply crates per segment
+    # Enemies, authored loot, and skill-check supply crates per segment.
     enemy_counter = 1
     loot_counter = 1
     crates: list[dict] = []
-    crate_loot_pools = [
-        ["plasma_lmg", "medkit", "ammo_pack"],
-        ["rail_carbine", "tactical_light", "stim_injector"],
-        ["portable_turret", "machine_pistol", "heavy_ammo"],
-        ["flare_revolver", "sonar_beacon", "medkit"],
-        ["tactical_light", "portable_turret", "isotope_cell"],
-    ]
-    ground_variety = ["medkit", "ammo_pack", "tactical_light", "portable_turret", "sonar_beacon", "stim_injector", "machine_pistol", "credits"]
+    crate_loot_pools = CATALOG.definitions["loot_tables"]["supply_crates"]
+    ground_variety = CATALOG.definitions["loot_tables"]["ground_variety"]
 
     for seg in segments:
         idx = seg["index"]
         tpl = SEGMENT_TEMPLATES[seg["id"]]
-        for w_idx, iw in enumerate(tpl.get("interior_walls", [])):
-            walls.append({
-                "id": f"wall_{idx}_int_{w_idx}",
-                "x": seg["x"] + float(iw["x"]),
-                "y": seg["y"] + float(iw["y"]),
-                "w": float(iw["w"]),
-                "h": float(iw["h"]),
-                "active": True,
-                "blocks_sight": bool(iw.get("blocks_sight", True)),
-                "type": "wall" if iw.get("blocks_sight", True) else "cover",
-            })
-
         for sp in tpl.get("enemy_spawns", []):
             etype = sp["type"]
             e_cfg = ENEMY_TYPES[etype]
@@ -303,20 +311,18 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
             })
             enemy_counter += 1
 
-        # Spawn a sparse subset of loot (reducing density: only 1 or at most 2 items per segment)
         available_loot = tpl.get("loot_spawns", [])
         if available_loot:
-            # Pick 1 item per segment, occasionally 2 in larger hubs
-            loot_count_in_seg = 2 if seg["id"] in ("command_hub", "bio_chamber") else 1
+            loot_count_in_seg = tpl["loot_count"]
             for lt_idx in range(min(loot_count_in_seg, len(available_loot))):
                 chosen_idx = (idx + lt_idx) % len(available_loot)
                 lt = available_loot[chosen_idx]
-                ltype = lt["type"] if lt["type"] != "credits" or lt_idx == 0 else ground_variety[(idx + lt_idx) % len(ground_variety)]
+                ltype = rng.choice(ground_variety) if lt["variety"] else lt["type"]
                 item_obj = make_item(ltype, f"loot_{loot_counter}")
                 item_obj.update({
                     "x": seg["x"] + float(lt["x"]),
                     "y": seg["y"] + float(lt["y"]),
-                    "radius": 2.0,
+                    "radius": RULES["interaction"]["ground_item_radius"],
                     "collected": False,
                     "segment_index": idx,
                 })
@@ -324,10 +330,10 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
                 loot_counter += 1
 
         # Add an interactive supply crate (locked with a skill-check puzzle) in segments
-        if seg["id"] != "extraction_pad":
-            cx = seg["x"] + (10.0 if seg["id"] == "drop_hangar" else 3.4)
-            cy = seg["y"] + (8.0 if seg["id"] == "drop_hangar" else seg["h"] - 3.2)
-            pool = crate_loot_pools[(idx + wfc["seed"]) % len(crate_loot_pools)]
+        if tpl.get("crate_spawn") is not None:
+            spawn = tpl["crate_spawn"]
+            cx, cy = seg["x"] + spawn["x"], seg["y"] + spawn["y"]
+            pool = rng.choice(crate_loot_pools)
             crate_id = f"crate_{idx}"
             crates.append({
                 "id": crate_id,
@@ -335,24 +341,36 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
                 "name": f"{seg['name']} Supply Crate",
                 "x": round(cx, 2),
                 "y": round(cy, 2),
-                "radius": 2.4,
-                "locked": idx > 0,  # Hangar crate unlocked for immediate testing; deeper crates have skill-check puzzle
+                "radius": RULES["interaction"]["crate_radius"],
+                "locked": spawn["locked"],
                 "puzzle": {
                     "id": f"crate_pz_{idx}",
                     "type": "power_reroute" if idx % 2 == 0 else "signal_decrypt",
+                    "definition_id": "power_reroute" if idx % 2 == 0 else "signal_decrypt",
+                    "definition": mutable_copy(CATALOG.definitions["puzzles"]["power_reroute" if idx % 2 == 0 else "signal_decrypt"]),
                     "label": f"Skill Check: Unlock {seg['name']} Supply Crate",
                     "crate_id": crate_id,
-                    "solved": idx == 0,
-                    "data": generate_puzzle_data("power_reroute" if idx % 2 == 0 else "signal_decrypt", 50 + idx),
+                    "solved": not spawn["locked"],
+                    "data": generate_puzzle_data("power_reroute" if idx % 2 == 0 else "signal_decrypt", rng=rng),
                 },
                 "items": [make_item(tid, f"crate_{idx}_item_{i}") for i, tid in enumerate(pool)],
                 "segment_index": idx,
             })
 
+    for wall in walls:
+        wall.setdefault("is_door", wall["type"] in ("door", "ship_ramp"))
+        wall.setdefault("material", "door" if wall["is_door"] else "solid")
+
     return {
         "mission_id": mission["id"],
         "mission_name": mission["name"],
         "seed": wfc["seed"],
+        "requested_seed": wfc.get("requested_seed", seed),
+        "resolved_seed": wfc["seed"],
+        "generator_version": GENERATOR_VERSION,
+        "content_version": CATALOG.definitions["content_version"],
+        "start_segment_index": wfc["start_segment_index"],
+        "end_segment_index": wfc["end_segment_index"],
         "grid_w": wfc["grid_w"],
         "grid_h": wfc["grid_h"],
         "width": wfc["grid_w"] * CELL_SIZE,
@@ -360,7 +378,9 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
         "segments": segments,
         "connectors": connectors_out,
         "walls": walls,
-        "puzzles": puzzles,
+        "ambience_emitters": ambience_emitters,
+        "props": props,
+        "puzzles": puzzles + prop_puzzles,
         "wires": wires,
         "enemies": enemies,
         "loot": loot,
@@ -372,71 +392,245 @@ def build_wfc_map(mission_id: str, seed: int = 42) -> dict:
     }
 
 
-def verify_level_solvability(map_data: dict) -> bool:
-    """
-    Verifies via 2D flood-fill that:
-    1. Every puzzle/button is accessible upstream of the door it opens.
-    2. Unlocking each door in sequence allows reaching the extraction zone from player spawn.
-    3. Players remain enclosed within the segments.
-    """
-    segments = map_data["segments"]
-    unlocked_doors: set[str] = {"spaceship_ramp"}
-    solved_puzzles: set[str] = set()
-    spawn_x, spawn_y = map_data["player_spawn_points"][0]
-    start_node = (round(spawn_x * 2) / 2.0, round(spawn_y * 2) / 2.0)
+def validate_generated_map(map_data: dict) -> None:
+    """Strict generation gate, not an automatic legacy-save migration or test pass."""
+    segments, walls = map_data["segments"], world_surfaces(map_data)
+    radius = RULES["player"]["radius"]
+    if not segments or not walls or not map_data["player_spawn_points"]:
+        raise ValueError("Missing segments, collision enclosure, or player spawns")
+    mission = MISSIONS[map_data["mission_id"]]
+    if not mission["min_segments"] <= len(segments) <= mission["max_segments"]:
+        raise ValueError("Final segment count outside mission bounds")
+    by_index = {s["index"]: s for s in segments}
+    if len(by_index) != len(segments) or set(by_index) != set(range(len(segments))):
+        raise ValueError("Invalid segment indices")
+    for role, field in (("start", "start_segment_index"), ("end", "end_segment_index")):
+        matches = [s["index"] for s in segments if s.get("role") == role]
+        if matches != [map_data.get(field)]:
+            raise ValueError(f"Requires exactly one explicit {role} segment")
+    if not set(mission["required_templates"]).issubset(s["id"] for s in segments):
+        raise ValueError("Missing required mission templates")
+    cells = set()
+    for s in segments:
+        if s["id"] not in mission["allowed_templates"] or s.get("role") != SEGMENT_TEMPLATES[s["id"]]["role"]:
+            raise ValueError("Invalid template or role")
+        expected = {(x, y) for x in range(s["grid_x"], s["grid_x"] + s["grid_w"])
+                    for y in range(s["grid_y"], s["grid_y"] + s["grid_h"])}
+        tpl = SEGMENT_TEMPLATES[s["id"]]
+        if ((s["grid_w"], s["grid_h"]) != (tpl["grid_w"], tpl["grid_h"]) or
+                (s["x"], s["y"], s["w"], s["h"]) !=
+                (s["grid_x"] * CELL_SIZE, s["grid_y"] * CELL_SIZE, tpl["width"], tpl["height"]) or
+                expected != {tuple(c) for c in s["cells"]} or cells & expected or
+                any(not (0 <= x < mission["grid_w"] and 0 <= y < mission["grid_h"]) for x, y in expected)):
+            raise ValueError("Invalid/overlapping segment footprint")
+        cells.update(expected)
+    wall_by_id = {w["id"]: w for w in walls}
+    if len(wall_by_id) != len(walls):
+        raise ValueError("Duplicate wall IDs")
+    for w in walls:
+        if any(not math.isfinite(w[k]) for k in ("x", "y", "w", "h")) or w["w"] <= 0 or w["h"] <= 0:
+            raise ValueError("Invalid collision rectangle")
+    puzzles = [p for p in map_data["puzzles"] if not p.get("prop_id")]
+    puzzle_by_id = {p["id"]: p for p in puzzles}
+    if len(puzzle_by_id) != len(puzzles):
+        raise ValueError("Duplicate puzzle IDs")
+    doors = {p["door_id"] for p in puzzles}
+    if len(doors) != len(puzzles) or any(wall_by_id.get(d, {}).get("type") != "door" for d in doors):
+        raise ValueError("Invalid puzzle door references")
+    ramp_id = map_data["spaceship"]["door_wall_id"]
+    if ramp_id not in wall_by_id:
+        raise ValueError("Missing dropship ramp")
+    opened = {ramp_id}
+    all_open = doors | opened
+    permanent = [w for w in walls if w.get("active", True) and w["id"] not in all_open]
+    adj = {i: set() for i in by_index}
+    connectors = map_data["connectors"]
+    if len(connectors) != len(puzzles):
+        raise ValueError("Connector/puzzle count mismatch")
+    used_doors = set()
+    for c in connectors:
+        u, v = c["from_segment"], c["to_segment"]
+        if u not in by_index or v not in by_index or u == v or c["dir"] not in DIRS:
+            raise ValueError("Invalid connector segment/direction")
+        dx, dy, opposite = DIRS[c["dir"]]
+        a, b = by_index[u], by_index[v]
+        pa = (c["gx"] - a["grid_x"], c["gy"] - a["grid_y"], c["dir"])
+        pb = (c["gx"] + dx - b["grid_x"], c["gy"] + dy - b["grid_y"], opposite)
+        def ports(s):
+            return {(p["cell_x"], p["cell_y"], p["dir"]) for p in SEGMENT_TEMPLATES[s["id"]]["connector_ports"]}
+        p = puzzle_by_id.get(c["puzzle_id"], {})
+        if (pa not in ports(a) or pb not in ports(b) or c["door_id"] not in doors or
+                c["door_id"] in used_doors or p.get("door_id") != c["door_id"] or
+                p.get("segment_index") != u or p.get("target_segment_index") != v):
+            raise ValueError("Unmatched connector ports/puzzle")
+        used_doors.add(c["door_id"])
+        center = ((c["gx"] + (1 if dx == 1 else 0.5 if dx == 0 else 0)) * CELL_SIZE,
+                  (c["gy"] + (1 if dy == 1 else 0.5 if dy == 0 else 0)) * CELL_SIZE)
+        door = wall_by_id[c["door_id"]]
+        if ((c["x"], c["y"]) != center or not point_in_rect(*center, door) or
+                not collision_path_clear((center[0] - dx * 2, center[1] - dy * 2),
+                                         (center[0] + dx * 2, center[1] + dy * 2), radius, permanent)):
+            raise ValueError("Blocked or misplaced connector")
+        adj[u].add(v)
+        adj[v].add(u)
+    connected, queue = {map_data["start_segment_index"]}, deque([map_data["start_segment_index"]])
+    while queue:
+        for v in sorted(adj[queue.popleft()] - connected):
+            connected.add(v)
+            queue.append(v)
+    if len(connected) != len(segments):
+        raise ValueError("Disconnected final segment graph")
 
-    def is_walkable(px: float, py: float) -> bool:
-        if not any(point_in_rect(px, py, s) for s in segments):
-            return False
-        for w in map_data["walls"]:
-            if not w.get("active", True) or w["id"] in unlocked_doors:
+    # Exact interval coverage on every exterior cell edge detects even sub-grid holes.
+    for gx, gy in sorted(cells):
+        for d, (dx, dy, _) in DIRS.items():
+            if (gx + dx, gy + dy) in cells:
                 continue
-            if circle_vs_aabb(px, py, 0.32, w)[2]:
-                return False
-        return True
+            vertical = d in ("E", "W")
+            boundary = (gx + (d == "E")) * CELL_SIZE if vertical else (gy + (d == "S")) * CELL_SIZE
+            low = (gy if vertical else gx) * CELL_SIZE
+            intervals = []
+            for w in permanent:
+                normal, extent = (w["x"], w["w"]) if vertical else (w["y"], w["h"])
+                if normal <= boundary <= normal + extent:
+                    tangent, length = (w["y"], w["h"]) if vertical else (w["x"], w["w"])
+                    intervals.append((tangent, tangent + length))
+            cursor = low
+            for begin, end in sorted(intervals):
+                if begin > cursor + 1e-8:
+                    break
+                cursor = max(cursor, end)
+            if cursor < low + CELL_SIZE:
+                raise ValueError(f"Unenclosed exterior edge {gx},{gy},{d}")
 
+    # A small spatial index keeps swept navigation independent of wall-list size.
+    buckets = {}
+    for w in walls:
+        if not w.get("active", True):
+            continue
+        for bx in range(math.floor((w["x"] - radius) / 4), math.floor((w["x"] + w["w"] + radius) / 4) + 1):
+            for by in range(math.floor((w["y"] - radius) / 4), math.floor((w["y"] + w["h"] + radius) / 4) + 1):
+                buckets.setdefault((bx, by), []).append(w)
+
+    def blockers(a, b):
+        near = {}
+        for bx in range(math.floor(min(a[0], b[0]) / 4), math.floor(max(a[0], b[0]) / 4) + 1):
+            for by in range(math.floor(min(a[1], b[1]) / 4), math.floor(max(a[1], b[1]) / 4) + 1):
+                for w in buckets.get((bx, by), ()):
+                    near[w["id"]] = w
+        return [w for w in near.values() if w["id"] not in opened]
+
+    def inside(p):
+        return any(point_in_rect(*p, s) for s in segments)
+
+    def clear(a, b):
+        return collision_path_clear(a, b, radius, blockers(a, b))
+
+    starts = []
+    for spawn in map_data["player_spawn_points"]:
+        node = (round(spawn[0]), round(spawn[1]))
+        if not point_in_rect(*spawn, by_index[map_data["start_segment_index"]]) or not inside(node) or not clear(spawn, node):
+            raise ValueError(f"Blocked player spawn {spawn}")
+        starts.append(node)
+    solved = set()
+    visited = set()
     while True:
-        visited = {start_node}
-        q = deque([start_node])
-        while q:
-            cx, cy = q.popleft()
-            for dx, dy in ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)):
-                nx, ny = cx + dx, cy + dy
-                if (nx, ny) not in visited and is_walkable(nx, ny):
-                    visited.add((nx, ny))
-                    q.append((nx, ny))
-
-        progressed = False
-        for pz in map_data["puzzles"]:
-            if pz["id"] in solved_puzzles:
+        visited = {starts[0]}
+        queue = deque(visited)
+        while queue:
+            a = queue.popleft()
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                b = (a[0] + dx, a[1] + dy)
+                if b not in visited and inside(b) and clear(a, b):
+                    visited.add(b)
+                    queue.append(b)
+        reachable = []
+        for p in puzzles:
+            if p["id"] in solved:
                 continue
-            # Check if any visited upstream walkable position can interact with this puzzle
-            if any(math.hypot(vx - pz["x"], vy - pz["y"]) <= pz["radius"] for vx, vy in visited):
-                solved_puzzles.add(pz["id"])
-                unlocked_doors.add(pz["door_id"])
-                progressed = True
-
-        if not progressed:
+            target = (p["x"], p["y"])
+            if any(point_in_rect(*v, by_index[p["segment_index"]]) and
+                   math.dist(v, target) <= p["radius"] and
+                   collision_path_clear(v, target, 0, blockers(v, target)) for v in visited):
+                reachable.append(p)
+        if not reachable:
             break
-
-    if len(solved_puzzles) < len(map_data["puzzles"]):
-        return False
-
+        for p in reachable:
+            solved.add(p["id"])
+            opened.add(p["door_id"])
+    if len(solved) != len(puzzles):
+        raise ValueError(f"Unreachable upstream puzzles: {sorted(set(puzzle_by_id) - solved)}")
+    if any(s not in visited for s in starts):
+        raise ValueError("Disconnected player spawns")
+    if any(not any(point_in_rect(*v, s) for v in visited) for s in segments):
+        raise ValueError("Unreachable segment interior")
+    for c in connectors:
+        center = (c["x"], c["y"])
+        if not any(math.dist(v, center) <= 1.5 and clear(v, center) for v in visited):
+            raise ValueError(f"Unreachable connector {c['id']}")
+    for e in map_data["enemies"]:
+        position = (e["x"], e["y"])
+        if not inside(position) or not collision_path_clear(position, position, e["radius"], permanent) or not any(
+                math.dist(v, position) <= 1.5 and clear(v, position) for v in visited):
+            raise ValueError(f"Blocked enemy spawn {e['id']}")
+    for target in map_data.get("crates", []) + map_data.get("loot", []) + [p for p in map_data["puzzles"] if p.get("prop_id")]:
+        position = (target["x"], target["y"])
+        reach = min(RULES["interaction"]["interact_radius"], target["radius"]) if target.get("type") == "supply_crate" and target.get("locked") else RULES["interaction"]["interact_radius"]
+        if not inside(position) or not any(math.dist(v, position) <= reach and
+                collision_path_clear(v, position, 0, permanent) for v in visited):
+            raise ValueError(f"Unreachable interaction {target['id']}")
     ext = map_data["extraction_zone"]
-    ext_cx = ext["x"] + ext["w"] * 0.5
-    ext_cy = ext["y"] + ext["h"] * 0.5
-    return any(math.hypot(vx - ext_cx, vy - ext_cy) <= 1.5 for vx, vy in visited)
+    end = by_index[map_data["end_segment_index"]]
+    if not point_in_rect(ext["x"], ext["y"], end) or not point_in_rect(ext["x"] + ext["w"], ext["y"] + ext["h"], end):
+        raise ValueError("Extraction outside explicit end segment")
+    if not any(ext["x"] + radius <= x <= ext["x"] + ext["w"] - radius and
+               ext["y"] + radius <= y <= ext["y"] + ext["h"] - radius for x, y in visited):
+        raise ValueError("Unreachable extraction footprint")
+    wires = map_data.get("wires", [])
+    if {w["puzzle_id"] for w in wires} != set(puzzle_by_id) or len(wires) != len(puzzles):
+        raise ValueError("Missing or duplicate wire routes")
+    for wire in wires:
+        path = wire["path"]
+        puzzle = puzzle_by_id.get(wire["puzzle_id"])
+        if not puzzle or wire["door_id"] != puzzle["door_id"] or not path or tuple(path[0]) != (puzzle["x"], puzzle["y"]) or not point_in_rect(*path[-1], wall_by_id[wire["door_id"]]):
+            raise ValueError("Invalid wire endpoints/references")
+        blocking = [w for w in walls if w["id"] != wire["door_id"] and w.get("active", True)]
+        if len(path) < 2 or any(not inside(p) for p in path) or any(
+                not collision_path_clear(a, b, 0.22, blocking) for a, b in zip(path, path[1:])):
+            raise ValueError(f"Blocked wire route {wire['puzzle_id']}")
+
+
+def verify_level_solvability(map_data: dict) -> bool:
+    try:
+        validate_generated_map(map_data)
+    except (ValueError, KeyError, TypeError, IndexError):
+        return False
+    return True
 
 
 def build_mission_map(mission_id: str, seed: int = 42, test_mode: bool = False) -> dict:
     """Builds a verified WFC level map for a mission."""
-    for attempt in range(25):
-        candidate = build_wfc_map(mission_id, seed + attempt * 31)
-        if verify_level_solvability(candidate):
-            if test_mode:
-                candidate["test_mode"] = True
-                candidate["enemies"] = []
-                candidate["loot"] = []
-                candidate["crates"] = []
-            return candidate
-    raise RuntimeError(f"Could not generate solvable WFC map for {mission_id}")
+    if mission_id not in MISSIONS or type(seed) is not int:
+        raise ValueError("Known mission and integer seed required")
+    diagnostics = []
+    for attempt in range(MAX_ATTEMPTS):
+        resolved_seed = seed + attempt * 17
+        layout = _try_seed(mission_id, resolved_seed, diagnostics)
+        if layout is None:
+            continue
+        try:
+            candidate = build_wfc_map(mission_id, seed, layout=layout)
+            validate_generated_map(candidate)
+        except ValueError as exc:
+            diagnostics.append({"seed": resolved_seed, "reason": str(exc)})
+            continue
+        candidate.update(requested_seed=seed, resolved_seed=resolved_seed,
+                         generation_diagnostics=diagnostics, generation_attempts=attempt + 1,
+                         geometry_validated=True)
+        if test_mode:
+            candidate["test_mode"] = True
+            candidate["enemies"] = []
+            candidate["loot"] = []
+            candidate["crates"] = []
+        return candidate
+    raise GenerationError(mission_id, seed, diagnostics)
