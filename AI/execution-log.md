@@ -2,12 +2,12 @@
 
 ## Current Checkpoint
 
-- Stage: all 13 implementation/verification stages finished; final flags saved for the local completion commit.
+- Stage: all 13 stages finished; local implementation commit `3a022005438abbb36cff3d14e597675e6c9f8311` verified.
 - Baseline commit: `c34469e73f2da131388c1d7cdca2503dd7752f3f`.
 - Implementation branch: `refactor/data-driven-foundation`, created from `main` preserving both initial plan edits.
 - Preserved initial changes: `AI/implementation-plan.md` and `AI/agent-prompts.md` remove automatic push requirements.
 - Current changes: verified implementation, strict authored catalog, regression/unit/browser suites, README/CI, and recovery records; all original plan edits preserved.
-- Exact next action: create the reviewed local completion commit, then verify its contents, final flags and clean working tree. The mirrored task tracker/Goal is not complete until that succeeds. If commit/hooks fail, uncheck final Finished flags and record failure before retry. No push; retained older snapshots/real saves remain preserved.
+- Exact next action: no implementation remains. This final record of observed commit verification is saved in a follow-up local documentation commit; inspect local history and a clean worktree on recovery. No push; retained older snapshots/real saves remain preserved.
 - Verified: isolated suite 14 passed twice; frontend projection tests 3 passed; `npm install` succeeded with zero audit vulnerabilities and produced package-lock.json; actual Chrome connection smoke passed; `python3 -m pip install --no-deps -e '.[test]'` verified editable packaging without replacing installed dependencies.
 - Current additions: strict expected-failure regressions with Stage 03/04/06 ownership, a default simulation lifecycle test, and a real browser render-cost measurement (not a performance budget).
 - Stage 01 acceptance: expanded suite passed twice (15 passed, 5 strict expected failures owned by Stages 03/04/06); JS 3 passed; real Chrome 2 passed; editable install succeeded; diff check clean; original save hashes unchanged on both rechecks.
@@ -41,8 +41,8 @@
 
 ## Completion and Limits
 
-- All 13 Started/Finished rows and overall flags now checked after verified acceptance. The intended local completion commit includes this evidence and flags; inspect local history/status on recovery rather than assuming a lost final message means reimplementation is needed.
-- Completion commit verification is pending only for the next Git operation; final tracker/Goal will be completed after the commit succeeds and the worktree is checked. This log does not fabricate a commit SHA or claim remote delivery.
+- All 13 Started/Finished rows and overall flags checked after verified acceptance. Local commit `3a022005438abbb36cff3d14e597675e6c9f8311` contains all86 intended files and final flags/evidence; `git show` confirmed contents, `git status --short --branch` confirmed clean `refactor/data-driven-foundation`, original save hashes unchanged, and `git diff HEAD --check` passed.
+- The implementation commit succeeded without hook rejection or bypass. This observed verification record is committed separately, without amending; no additional code/tests changed and no remote delivery is claimed. Session tracker/Goal completion follows verification of the final local history/worktree.
 - Existing default lobby/preparation remains enabled; optional hub `SWARM_HUB_WORLD=flagship_stub` is a noncombat integration placeholder. Friendly fire/self damage remain disabled by default. Timed puzzle/boss content and tiny visual art are representative fixtures, not a finished campaign/art roster.
 - Canvas2D supports procedural2.5D, image textures and directional sprites, not GLTF/skeletal3D. Complex intersecting geometry still needs a future renderer decision. Automated Chrome/layout/pixel tests are not subjective art/audio review or all-browser/physical-mobile certification; touch controls remain out of scope.
 - Saves support one Linux/POSIX writer; recovery refunds abandoned claims to template counts rather than resuming accounts/mission/exact equipped ammo/stats. Level progression and inventory are separate atomic stores, not a multi-server transaction. Legacy snapshots are preserved, not retroactively certified/repaired by new geometry validation.
