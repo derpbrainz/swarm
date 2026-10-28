@@ -98,10 +98,10 @@ def test_effective_balance_and_legacy_expanded_values(game_room):
     assert effects["portable_turret"]["duration"] == 10
     assert effects["sonar_beacon"]["duration"] == 4
     before = copy.deepcopy(game_room.level_store.levels)
-    level = game_room.level_store.instantiate_map("outpost_101", force_test_mode=False)
+    level = game_room.level_store.instantiate_map("outpost_101")
     source = before["outpost_101"]["map_template"]
-    assert [{k: v for k, v in wall.items() if k not in ("is_door", "material")} for wall in level["walls"]] == source["walls"]
-    assert [{k: v for k, v in p.items() if k not in ("definition", "definition_id", "session")} for p in level["puzzles"]] == source["puzzles"]
+    assert [{k: v for k, v in wall.items() if k not in ("is_door", "material")} for wall in level["walls"]] == [{k: v for k, v in wall.items() if k not in ("is_door", "material")} for wall in source["walls"]]
+    assert [{k: v for k, v in p.items() if k not in ("definition", "definition_id", "session")} for p in level["puzzles"]] == [{k: v for k, v in p.items() if k not in ("definition", "definition_id", "session")} for p in source["puzzles"]]
     assert game_room.level_store.levels == before
     item = make_item("medkit")
     item["value"]["heal"] = 71
@@ -114,7 +114,7 @@ def test_effective_balance_and_legacy_expanded_values(game_room):
 
 def test_public_payload_hides_only_private_power_answers(game_room, game_app):
     player = game_room.add_player("p")
-    assert game_room.start_mission("p", False)
+    assert game_room.start_mission("p")
     before = copy.deepcopy(game_room.map_data)
     snapshot = game_room.get_snapshot("p")
     for puzzle in snapshot["map"]["puzzles"]:
@@ -160,7 +160,7 @@ from backend.app.main import create_app
 room = GameRoom(LevelStore(Path(sys.argv[1])), SharedStash(Path(sys.argv[2])))
 p = room.add_player("p")
 assert p["ammo"] == 9 and p["inventory"]["max_weight"] == 29
-assert room.start_mission("p", False)
+assert room.start_mission("p")
 room.phase = "active"
 room.map_data["walls"] = []
 room.map_data["enemies"] = [{"id":"e","type":"stalker","x":p["x"]+5,"y":p["y"],"hp":45,"radius":0.7,"state":"patrol"}]
@@ -250,7 +250,7 @@ def test_edited_deployable_tuning_controls_actual_projectiles_and_healing(game_r
     monkeypatch.setattr("backend.app.engine.game_loop.CHARACTER_CLASSES", edited.classes)
     p = game_room.add_player("p")
     assert game_room.select_class("p", class_id)
-    assert game_room.start_mission("p", False)
+    assert game_room.start_mission("p")
     game_room.phase = "active"
     game_room.map_data["walls"] = []
     enemies = game_room.map_data["enemies"]
@@ -277,7 +277,7 @@ def test_every_weapon_sound_emission_is_registered_without_name_guessing(game_ro
     from backend.app.engine.audio_events import AUDIO_CONFIGS
     from backend.app.engine.inventory import sync_weapon_state
     p = game_room.add_player("p")
-    assert game_room.start_mission("p", False)
+    assert game_room.start_mission("p")
     game_room.phase = "active"
     game_room.map_data["walls"] = []
     game_room.map_data["enemies"] = []

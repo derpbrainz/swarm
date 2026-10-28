@@ -17,7 +17,7 @@ from backend.app.config.items import ITEM_TEMPLATES, make_item
 from backend.app.config.missions import MISSIONS
 from backend.app.content import CATALOG, RULES, mutable_copy, public_payload
 from backend.app.engine.ai import update_enemies
-from backend.app.engine import puzzles as puzzle_handlers, objectives
+from backend.app.engine import puzzles as puzzle_handlers, objectives, doors
 from backend.app.engine.combat import allied, apply_damage, can_target, faction
 from backend.app.engine.inventory import (
     add_item_to_player,
@@ -91,6 +91,7 @@ class GameRoom:
         self.mission_time: float = 0.0
         self._music_start_t: float = 0.0
         self.simulation_time = 0.0
+        self.pending_broken_return = None
         self.event_sequence = 0
         self._event_namespace = uuid.uuid4().hex
         self._listener_event_floor = {}
@@ -396,13 +397,13 @@ class GameRoom:
         if seed is not None and (type(seed) is not int or not 0 <= seed <= 2**31 - 1):
             return None
         mid = mission_id or self.selected_mission_id
-        rec = self.level_store.generate_level(mid, seed=seed, tested=False)
+        rec = self.level_store.generate_level(mid, seed=seed)
         self.selected_mission_id = rec["mission_id"]
         self.selected_level_id = rec["level_id"]
-        self.events_log.append(f"Generated new WFC level '{rec['name']}' (Status: TESTING REQUIRED).")
+        self.events_log.append(f"Generated new WFC level '{rec['name']}' (not yet completed).")
         return rec
 
-    def start_mission(self, player_id: str, force_test_mode: bool | None = None, target_id=None) -> bool:
+    def start_mission(self, player_id: str, target_id=None) -> bool:
         if player_id != self.leader_id or self.phase not in ("lobby", "prep"):
             return False
         if not self.players:
@@ -416,9 +417,7 @@ class GameRoom:
         if not unlocked:
             self.last_lock_reason = reason
             return False
-        if force_test_mode is not None and type(force_test_mode) is not bool:
-            return False
-        candidate = self.level_store.instantiate_map(target_id, force_test_mode=force_test_mode)
+        candidate = self.level_store.instantiate_map(target_id)
         candidate.setdefault("world_kind", "mission")
         candidate.setdefault("world_name", candidate["mission_name"])
         candidate["capabilities"] = mutable_copy(self.catalog.definitions["world_rules"]["mission"])
@@ -457,14 +456,32 @@ class GameRoom:
         self._reset_world_presentation()
         self.dropship_timer = RULES["timing"]["dropship_countdown"]
         self.phase = "dropship"
-        if self.map_data.get("test_mode"):
-            self.events_log = [
-                f"[TESTING PHASE] Dropship docked at {self.map_data.get('level_name', self.map_data['mission_name'])}. "
-                "No enemies or loot — verify objectives & extraction route!"
-            ]
-        else:
-            self.events_log = [f"Dropship docked at {self.map_data.get('level_name', self.map_data['mission_name'])}. Stand by for ramp release..."]
+        self.events_log = [f"Dropship docked at {self.map_data.get('level_name', self.map_data['mission_name'])}. Stand by for ramp release..."]
         return True
+
+    def report_broken_level(self, player_id: str, level_id: str, world_id: str, reason: str) -> dict:
+        player = self.players.get(player_id)
+        if not player or not self.map_data or self.phase not in ("dropship", "active", "defeat"):
+            return {"ok": False, "message": "No reportable mission"}
+        if self.map_data.get("world_kind") != "mission" or self.map_data.get("world_id") != world_id or self.map_data.get("level_id") != level_id:
+            return {"ok": False, "message": "Stale or incorrect level report"}
+        if not self.level_store.mark_broken(level_id, reason, player_id=player_id, player_name=player["name"],
+                                           world_id=world_id, simulation_time=self.simulation_time):
+            return {"ok": False, "message": "Only uncompleted, unreported levels can be marked broken"}
+        self.pending_broken_return = level_id
+        self._return_from_broken_level()
+        return {"ok": True, "message": "Report saved; broken map retained for repair"}
+
+    def _return_from_broken_level(self):
+        self.reset_to_lobby()
+        self.pending_broken_return = None
+        available = [r for r in self.level_store.levels.values() if not r.get("broken") and self.level_store.is_level_unlocked(r["level_id"])[0]]
+        if available:
+            self.selected_level_id = available[0]["level_id"]
+            self.selected_mission_id = available[0]["mission_id"]
+        else:
+            self.selected_level_id = None
+        self.events_log.append("Level reported broken and retained with its failure reason.")
 
     def reset_to_lobby(self) -> None:
         candidate = instantiate_world(self.hub_world, self.catalog) if self.hub_world else None
@@ -1098,6 +1115,9 @@ class GameRoom:
         return result
 
     def step(self, dt: float) -> None:
+        if self.pending_broken_return is not None:
+            self._return_from_broken_level()
+            return
         for player_id in list(self.pending_disconnects):
             self.remove_player(player_id)
         # Presentation ages in terminal phases too. Snapshot reads never advance time.
@@ -1146,6 +1166,7 @@ class GameRoom:
                 self.phase = "active"
                 self.open_spaceship_ramp()
 
+        doors.update_proximity_doors(self)
         walls = world_surfaces(self.map_data)
         enemies = self.map_data["enemies"]
         for puzzle in self.map_data["puzzles"] + [c["puzzle"] for c in self.map_data.get("crates", []) if c.get("puzzle")]:
@@ -1227,7 +1248,8 @@ class GameRoom:
             p["running"] = is_running
 
             if abs(p["vx"]) > 0.01 or abs(p["vy"]) > 0.01:
-                nx, ny = move_with_collisions(p["x"], p["y"], p["vx"], p["vy"], dt, p["radius"], walls)
+                nx, ny = move_with_collisions(p["x"], p["y"], p["vx"], p["vy"], dt, p["radius"], walls,
+                                             before_step=lambda x, y: doors.update_proximity_doors(self, player=p, position=(x, y)))
                 p["x"], p["y"] = nx, ny
                 p["footstep_timer"] -= dt
                 if p["footstep_timer"] <= 0.0:
@@ -1404,20 +1426,11 @@ class GameRoom:
                     all_inside = False
             if all_inside:
                 lvl_id = self.map_data.get("level_id")
-                if self.map_data.get("test_mode") and lvl_id:
-                    self.level_store.mark_tested(lvl_id)
+                banked = deposit_squad_loot(living_players, self.shared_stash)
+                if lvl_id:
                     self.level_store.mark_completed(lvl_id)
-                    self.map_data["level_tested"] = True
-                    self.events_log.append(
-                        f"Level '{self.map_data.get('level_name')}' passed testing phase! Marked VERIFIED & next level unlocked."
-                    )
-                else:
-                    banked = deposit_squad_loot(living_players, self.shared_stash)
-                    if lvl_id:
-                        self.level_store.mark_completed(lvl_id)
-                    self.events_log.append(
-                        f"Squad extracted! {banked} items deposited into Shared Chest & next level unlocked!"
-                    )
+                    self.map_data["level_completed"] = True
+                self.events_log.append(f"Squad extracted! {banked} items banked. Completed level has passed testing.")
                 self.phase = "victory"
                 self._neutral_players()
 
@@ -1593,8 +1606,9 @@ class GameRoom:
                 "geometry_revision": self.map_data.get("geometry_revision", 0),
                 "level_id": self.map_data.get("level_id"),
                 "level_name": self.map_data.get("level_name"),
-                "test_mode": bool(self.map_data.get("test_mode", False)),
-                "level_tested": bool(self.map_data.get("level_tested", True)),
+                "level_completed": bool(self.map_data.get("level_completed", False)),
+                "can_report_broken": bool(self.phase in ("dropship", "active", "defeat") and self.map_data.get("level_id") in self.level_store.levels and
+                                          not self.level_store.levels[self.map_data["level_id"]].get("completed") and not self.level_store.levels[self.map_data["level_id"]].get("broken")),
                 **{key: self.map_data[key] for key in ("mission_id", "mission_name", "spaceship", "extraction_zone") if key in self.map_data},
                 "width": self.map_data["width"],
                 "height": self.map_data["height"],

@@ -28,7 +28,7 @@ def withdraw(room, pid, tid="medkit", slot=None):
 
 
 def active(room, pid="p"):
-    assert room.start_mission(pid, force_test_mode=False)
+    assert room.start_mission(pid)
     room.phase = "active"
     room.map_data["enemies"] = []
     room.map_data["walls"] = []

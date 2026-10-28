@@ -26,7 +26,7 @@ def encounter_room(game_room):
     room.catalog = fixture_catalog()
     room.add_player("leader")
     room.add_player("peer")
-    room.start_mission("leader", False)
+    room.start_mission("leader")
     room.phase = "active"
     for p in room.players.values():
         p.update(x=10.0, y=10.0)
@@ -248,12 +248,12 @@ def test_boss_profiles_melee_ranged_cooldown_thresholds_and_normal_ai(encounter_
 def test_legacy_runtime_mapping_keeps_layouts_and_real_store_bytes(game_room):
     before = copy.deepcopy(game_room.level_store.levels)
     bytes_before = game_room.level_store.data_file.read_bytes()
-    one = game_room.level_store.instantiate_map("outpost_101", False)
-    two = game_room.level_store.instantiate_map("outpost_101", False)
+    one = game_room.level_store.instantiate_map("outpost_101")
+    two = game_room.level_store.instantiate_map("outpost_101")
     original = before["outpost_101"]["map_template"]
     for p, old in zip(one["puzzles"], original["puzzles"]):
         assert p["data"] == old["data"]
-        assert {k: v for k, v in p.items() if k not in ("definition", "definition_id", "session")} == old
+        assert {k: v for k, v in p.items() if k not in ("definition", "definition_id", "session")} == {k: v for k, v in old.items() if k not in ("definition", "definition_id", "session")}
     assert one["puzzles"][0]["session"]["id"] != two["puzzles"][0]["session"]["id"]
     assert game_room.level_store.levels == before
     assert game_room.level_store.data_file.read_bytes() == bytes_before
@@ -321,18 +321,19 @@ def test_launch_unknown_objective_reference_rejected_before_world_publication(ga
     game_room.catalog = validate_content(data)
     before = copy.deepcopy(game_room.players)
     with pytest.raises(ValueError, match="unknown objective target"):
-        game_room.start_mission("p", False)
+        game_room.start_mission("p")
     assert game_room.map_data is None and game_room.phase == "lobby" and game_room.players == before
 
 
 def test_saved_definition_variant_retains_authored_parameters_when_catalog_changes(game_room):
     record = game_room.level_store.levels["outpost_101"]
+    record["content_version"] = "earlier-catalog"
     puzzle = record["map_template"]["puzzles"][0]
     puzzle["definition"] = {"handler": "power_reroute", "node_count": 2, "allow_tech_bypass": False}
     puzzle["data"] = {"type": "power_reroute", "nodes": [1, 2], "target": [0, 0]}
     game_room.level_store.save()
     before = game_room.level_store.data_file.read_bytes()
-    runtime = game_room.level_store.instantiate_map("outpost_101", False)["puzzles"][0]
+    runtime = game_room.level_store.instantiate_map("outpost_101")["puzzles"][0]
     assert runtime["definition"] == puzzle["definition"] and runtime["data"] == puzzle["data"]
     assert runtime["session"]["id"] and "session" not in puzzle
     assert game_room.level_store.data_file.read_bytes() == before

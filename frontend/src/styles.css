@@ -902,3 +902,6 @@ button { overflow-wrap: anywhere; }
   .hud-inventory-sidebar:not(.inventory-expanded) { width: auto; }
   .hud-events { display: none; }
 }
+.hud-inventory-sidebar #report-level-btn { border-color: #f87171; color: #fca5a5; flex-shrink: 0; }
+#level-report-modal { z-index: 180; }
+#level-report-reason { width: 100%; box-sizing: border-box; resize: vertical; margin: 12px 0; padding: 10px; color: #e2e8f0; background: #0f172a; border: 1px solid #475569; font: inherit; }

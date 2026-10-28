@@ -30,14 +30,14 @@ class PuzzleAction(BaseModel):
 
 class Command(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
-    type: Literal["set_name", "select_class", "select_mission", "generate_level", "prepare_mission", "start_mission", "toggle_ready", "min_loadout", "stash_to_player", "player_to_stash", "inventory_action", "pickup_item", "take_crate_item", "return_lobby", "input", "reload", "skill", "interact", "puzzle_action"]
+    type: Literal["set_name", "select_class", "select_mission", "generate_level", "prepare_mission", "start_mission", "toggle_ready", "min_loadout", "stash_to_player", "player_to_stash", "inventory_action", "pickup_item", "take_crate_item", "return_lobby", "report_broken_level", "input", "reload", "skill", "interact", "puzzle_action"]
     name: Annotated[str, Field(min_length=1, max_length=20)] | None = None
     class_id: Identity | None = None
     mission_id: Identity | None = None
     level_id: Identity | None = None
     seed: Annotated[int, Field(ge=0, le=2**31 - 1)] | None = None
     prepare: bool = True
-    test_mode: bool | None = None
+    reason: Annotated[str, Field(min_length=1, max_length=1000)] | None = None
     ready: bool | None = None
     target_player_id: Identity | None = None
     template_id: Identity | None = None
@@ -64,7 +64,7 @@ class Command(BaseModel):
             "set_name": {"name"}, "select_class": {"class_id"},
             "select_mission": {"mission_id", "level_id", "prepare", "target_id"},
             "generate_level": {"mission_id", "seed"}, "prepare_mission": {"target_id"},
-            "start_mission": {"test_mode", "target_id"}, "toggle_ready": {"ready", "target_player_id"},
+            "start_mission": {"target_id"}, "toggle_ready": {"ready", "target_player_id"},
             "min_loadout": {"target_player_id"},
             "stash_to_player": {"template_id", "target_slot", "target_player_id", "target_id"},
             "player_to_stash": {"item_id", "target_player_id", "target_id"},
@@ -73,11 +73,12 @@ class Command(BaseModel):
             "return_lobby": set(), "input": {"dx", "dy", "aim_x", "aim_y", "firing", "running"},
             "reload": set(), "skill": set(), "interact": {"target_id"},
             "puzzle_action": {"puzzle_id", "action"},
+            "report_broken_level": {"level_id", "world_id", "reason"},
         }[self.type]
         correlation = {"request_id", "session_id", "world_id"}
         if self.type in ("interact", "puzzle_action", "take_crate_item", "select_mission", "prepare_mission", "start_mission", "stash_to_player", "player_to_stash"):
             allowed |= correlation
-        if self.model_fields_set & correlation:
+        if self.type != "report_broken_level" and self.model_fields_set & correlation:
             if not correlation.issubset(self.model_fields_set) or any(getattr(self, field) is None for field in correlation):
                 raise ValueError("interaction correlation requires request, session and world")
         if "target_id" in self.model_fields_set and self.target_id is None:
@@ -90,6 +91,7 @@ class Command(BaseModel):
             "stash_to_player": {"template_id"}, "player_to_stash": {"item_id"},
             "inventory_action": {"action"}, "pickup_item": {"item_id"},
             "take_crate_item": {"crate_id", "item_id"}, "puzzle_action": {"puzzle_id", "action"},
+            "report_broken_level": {"level_id", "world_id", "reason"},
         }.get(self.type, set())
         if any(getattr(self, field) is None for field in required):
             raise ValueError("required command field missing")
@@ -97,6 +99,8 @@ class Command(BaseModel):
             raise ValueError("mission or level ID required")
         if self.type == "set_name" and not self.name.strip():
             raise ValueError("name is blank")
+        if self.type == "report_broken_level" and not self.reason.strip():
+            raise ValueError("failure reason is blank")
         if self.type == "input":
             if any(getattr(self, field) is None for field in supplied):
                 raise ValueError("input fields cannot be null")

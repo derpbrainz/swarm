@@ -67,9 +67,9 @@ def test_level_persistence_and_testing_phase():
     _reset_room()
     for existing in level_store.levels.values():
         if existing["mission_id"] == "outpost":
-            existing["tested"] = True
+            existing["completed"] = True
 
-    rec = level_store.generate_level("outpost", seed=777, tested=False)
+    rec = level_store.generate_level("outpost", seed=777)
     assert rec["tested"] is False
     assert rec["level_id"] in level_store.levels
 
@@ -78,8 +78,8 @@ def test_level_persistence_and_testing_phase():
     assert room.start_mission("p1")
 
     room.step(3.0)
-    assert room.map_data["test_mode"] is True
-    assert len(room.map_data.get("enemies", [])) == 0
+    assert room.map_data["level_completed"] is False
+    assert len(room.map_data.get("enemies", [])) > 0
     assert len(room.map_data.get("loot", [])) > 0
 
     puzzles = room.map_data.get("puzzles", [])
@@ -102,7 +102,7 @@ def test_level_persistence_and_testing_phase():
     assert room.start_mission("p1")
 
     room.step(3.0)
-    assert room.map_data["test_mode"] is False
+    assert room.map_data["level_completed"] is True
     assert len(room.map_data.get("enemies", [])) > 0
     assert len(room.map_data.get("loot", [])) > 0
 
@@ -124,6 +124,8 @@ def test_class_selection_and_level_progression_unlocks():
         assert room.players["p1"]["class_id"] == cls_id
 
     # Outpost #1, Outpost #2, and Biolab #1 are unlocked initially
+    assert room.select_mission("p1", "outpost_154", enforce_unlock=True) is False
+    level_store.mark_completed("outpost_101")
     assert room.select_mission("p1", "outpost_154", enforce_unlock=True) is True
     assert room.selected_level_id == "outpost_154"
     assert room.select_mission("p1", "biolab_202", enforce_unlock=True) is True
@@ -135,8 +137,8 @@ def test_class_selection_and_level_progression_unlocks():
     assert room.select_mission("p1", "biolab_255", enforce_unlock=True) is False
 
     unlocked_r1, reason_r1 = level_store.is_level_unlocked("reactor_303")
-    assert unlocked_r1 is False and "first to unlock" in (reason_r1 or "")
-    assert room.select_mission("p1", "reactor_303", enforce_unlock=True) is False
+    assert unlocked_r1 is True and reason_r1 is None
+    assert room.select_mission("p1", "reactor_303", enforce_unlock=True) is True
 
     # Completing Biolab #1 unlocks both Biolab #2 and Reactor #1!
     level_store.mark_completed("biolab_202")
@@ -158,7 +160,7 @@ def test_map_segment_stitching():
     assert m["segments"][-1]["id"] == "extraction_pad"
     assert m["spaceship"]["ramp_open"] is False
     assert m["extraction_zone"]["active"] is False
-    assert len(m["puzzles"]) >= 2
+    assert len(m["puzzles"]) == sum(c["mode"] == "puzzle" for c in m["connectors"])
     assert len(m["enemies"]) >= 5
 
 
@@ -265,7 +267,7 @@ def test_enemy_hearing_and_sight_ai():
     p1 = room.add_player("p1", "Scout")
     room.select_class("p1", "vanguard")
     room.select_mission("p1", "outpost_101")
-    room.start_mission("p1", force_test_mode=False)
+    room.start_mission("p1")
     room.step(3.0)  # open ramp
 
     enemy = room.map_data["enemies"][0]

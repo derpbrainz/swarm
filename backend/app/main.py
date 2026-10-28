@@ -108,7 +108,7 @@ async def generate_level(request: Request, body: dict[str, Any] | None = Body(de
         if mission not in MISSIONS:
             raise ValueError("Unknown mission")
         request.app.state.last_generation = now
-        record = request.app.state.room.level_store.generate_level(mission, command.seed, tested=False)
+        record = request.app.state.room.level_store.generate_level(mission, command.seed)
     except (ValueError, ValidationError) as exc:
         raise HTTPException(422, "Invalid generation request") from exc
     except SaveError as exc:
@@ -117,7 +117,7 @@ async def generate_level(request: Request, body: dict[str, Any] | None = Body(de
 
 
 def dispatch_command(room: GameRoom, player_id: str, command: dict, *, development_tools=False) -> dict | None:
-    correlation = {key: command[key] for key in ("request_id", "session_id", "world_id") if key in command}
+    correlation = {key: command[key] for key in ("request_id", "session_id", "world_id") if key in command} if command.get("request_id") else {}
     if correlation:
         if command.get("session_id") != player_id or command.get("world_id") != (room.map_data or {}).get("world_id"):
             raise ValueError("Stale interaction session or world")
@@ -159,11 +159,9 @@ def _dispatch_command(room: GameRoom, player_id: str, command: dict, *, developm
     elif kind == "prepare_mission":
         result = room.prepare_mission(player_id, command.get("target_id"))
     elif kind == "start_mission":
-        if "test_mode" in command and not development_tools:
-            raise ValueError("Test mode override disabled")
         if room.phase != "prep" or not room.players or not all(p.get("ready") for p in room.players.values()):
             raise ValueError("Launch requires all-ready preparation")
-        result = room.start_mission(player_id, command.get("test_mode"), command.get("target_id"))
+        result = room.start_mission(player_id, command.get("target_id"))
     elif kind == "toggle_ready":
         result = room.toggle_ready(player_id, command.get("ready"))
     elif kind == "min_loadout":
@@ -182,6 +180,8 @@ def _dispatch_command(room: GameRoom, player_id: str, command: dict, *, developm
         result = player_id == room.leader_id or room.phase in ("victory", "defeat")
         if result:
             room.reset_to_lobby()
+    elif kind == "report_broken_level":
+        return {"type": "level_report_feedback", **room.report_broken_level(player_id, command["level_id"], command["world_id"], command["reason"])}
     elif kind == "input":
         result = room.update_input(player_id, command)
     elif kind == "reload":

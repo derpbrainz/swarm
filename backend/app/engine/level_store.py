@@ -36,7 +36,7 @@ class LevelStore:
             required = {"segments", "walls", "puzzles", "enemies", "player_spawn_points", "spaceship", "extraction_zone"}
             if not isinstance(template, dict) or not required.issubset(template):
                 raise SaveError(f"{source}: incomplete map in {level_id}; explicit repair required")
-            for flag in ("tested", "completed"):
+            for flag in ("completed", "broken"):
                 record.setdefault(flag, False)
                 if type(record[flag]) is not bool:
                     raise SaveError(f"{source}: invalid {flag} in {level_id}")
@@ -50,7 +50,15 @@ class LevelStore:
                     item["type"] = identity
             record["segment_count"] = len(template["segments"])
             record["connector_count"] = len(template.get("connectors", []))
-            record.setdefault("status", "verified" if record["tested"] else "testing")
+            record["tested"] = record["completed"] and not record["broken"]
+            record["status"] = "broken" if record["broken"] else "verified" if record["completed"] else "uncompleted"
+            record.setdefault("failure_reports", [])
+            if not isinstance(record["failure_reports"], list) or any(
+                not isinstance(report, dict) or not isinstance(report.get("reason"), str) or
+                not report["reason"].strip() or len(report["reason"]) > 1000
+                for report in record["failure_reports"]
+            ):
+                raise SaveError(f"{source}: invalid failure reports in {level_id}")
         self.levels = records
         self.loaded = True
         if not self.data_file.exists():
@@ -68,12 +76,12 @@ class LevelStore:
             suffix += 1
         return f"{base}_{suffix}"
 
-    def generate_level(self, mission_id: str, seed: int | None = None, tested: bool = False) -> dict:
+    def generate_level(self, mission_id: str, seed: int | None = None) -> dict:
         from backend.app.config.missions import MISSIONS
 
         mission_cfg = MISSIONS[mission_id]
         actual_seed = int(seed) if seed is not None else (100 + (len(self.levels) + 1) * 53)
-        map_template = build_mission_map(mission_id, seed=actual_seed, test_mode=False)
+        map_template = build_mission_map(mission_id, seed=actual_seed)
         validate_generated_map(map_template)
         level_id = self._level_id(mission_id, actual_seed)
         same_mission_count = sum(1 for r in self.levels.values() if r.get("mission_id") == mission_id) + 1
@@ -91,9 +99,11 @@ class LevelStore:
             "geometry_validated": True,
             "generation_attempts": map_template["generation_attempts"],
             "generation_diagnostics": copy.deepcopy(map_template["generation_diagnostics"]),
-            "tested": bool(tested),
+            "tested": False,
             "completed": False,
-            "status": "verified" if tested else "testing",
+            "broken": False,
+            "failure_reports": [],
+            "status": "uncompleted",
             "segment_count": len(map_template.get("segments", [])),
             "connector_count": len(map_template.get("connectors", [])),
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -118,7 +128,7 @@ class LevelStore:
         if not prereq:
             return True, None
         has_completed_easier = any(
-            r.get("mission_id") in prereq and r.get("completed", False)
+            r.get("mission_id") in prereq and r.get("completed", False) and not r.get("broken", False)
             for r in self.levels.values()
         )
         if not has_completed_easier:
@@ -132,19 +142,17 @@ class LevelStore:
     def is_level_unlocked(self, level_or_mission_id: str) -> tuple[bool, str | None]:
         if level_or_mission_id in self.levels:
             rec = self.levels[level_or_mission_id]
+            if rec.get("broken", False):
+                return False, "Broken level retained for repair; choose another level"
             m_ok, m_reason = self.is_mission_unlocked(rec["mission_id"])
             if not m_ok:
                 return False, m_reason
-            same_mission = [r for r in self.levels.values() if r.get("mission_id") == rec["mission_id"]]
+            same_mission = [r for r in self.levels.values() if r.get("mission_id") == rec["mission_id"] and not r.get("broken", False)]
             for idx, item in enumerate(same_mission):
                 if item["level_id"] == rec["level_id"] and idx > 0:
                     prev = same_mission[idx - 1]
-                    if MISSIONS[rec["mission_id"]]["previous_level_accepts_tested"]:
-                        if not prev.get("tested", False) and not prev.get("completed", False):
-                            return False, f"Complete '{prev['name']}' testing phase first to unlock {rec['name']}"
-                    else:
-                        if not prev.get("completed", False):
-                            return False, f"Complete easier level '{prev['name']}' first to unlock {rec['name']}"
+                    if not prev.get("completed", False):
+                        return False, f"Complete easier level '{prev['name']}' first to unlock {rec['name']}"
             return True, None
         return self.is_mission_unlocked(level_or_mission_id)
 
@@ -159,8 +167,10 @@ class LevelStore:
                 "name": record["name"],
                 "difficulty": record["difficulty"],
                 "seed": record["seed"],
-                "tested": bool(record.get("tested", False)),
+                "tested": bool(record.get("completed", False) and not record.get("broken", False)),
                 "completed": bool(record.get("completed", False)),
+                "broken": bool(record.get("broken", False)),
+                "failure_reports": copy.deepcopy(record.get("failure_reports", [])),
                 "unlocked": unlocked,
                 "lock_reason": lock_reason,
                 "status": record["status"],
@@ -183,7 +193,7 @@ class LevelStore:
         if level_or_mission_id in self.levels:
             return self.levels[level_or_mission_id]
 
-        candidates = [record for record in self.levels.values() if record.get("mission_id") == level_or_mission_id]
+        candidates = [record for record in self.levels.values() if record.get("mission_id") == level_or_mission_id and not record.get("broken", False)]
         if candidates:
             unlocked_cands = [r for r in candidates if self.is_level_unlocked(r["level_id"])[0]]
             pool = unlocked_cands or candidates
@@ -191,8 +201,10 @@ class LevelStore:
 
         return self.generate_level(level_or_mission_id)
 
-    def instantiate_map(self, level_or_mission_id: str, force_test_mode: bool | None = None) -> dict:
+    def instantiate_map(self, level_or_mission_id: str) -> dict:
         record = self.get_level_record(level_or_mission_id)
+        if record.get("broken", False):
+            raise ValueError("Broken levels are retained for repair, not playable")
         map_copy = copy.deepcopy(record.get("map_template", {}))
         # Legacy snapshots are deliberately not reclassified/repaired at mission start.
         version = record.get("generator_version", map_copy.get("generator_version"))
@@ -224,39 +236,38 @@ class LevelStore:
         for puzzle in map_copy.get("puzzles", []) + [c["puzzle"] for c in map_copy.get("crates", []) if c.get("puzzle")]:
             runtime_puzzle(puzzle)
 
-        is_test = force_test_mode if force_test_mode is not None else (not record["tested"])
-
         map_copy["level_id"] = record["level_id"]
         map_copy["level_name"] = record["name"]
-        map_copy["level_tested"] = record["tested"]
-        map_copy["test_mode"] = bool(is_test)
-
-        if is_test:
-            # Combat requirements are explicitly skipped only for real removed spawns.
-            # Keep their identity for objective validation, never invent unknown targets.
-            map_copy["testing_enemy_ids"] = [enemy["id"] for enemy in map_copy.get("enemies", [])]
-            map_copy["enemies"] = []
+        map_copy["level_completed"] = record["completed"]
+        map_copy.pop("test_mode", None)
+        map_copy.pop("testing_enemy_ids", None)
+        map_copy.pop("level_tested", None)
 
         return map_copy
 
-    def mark_tested(self, level_id: str) -> bool:
-        record = self.levels.get(level_id)
-        if not record:
-            return False
-
-        self._update_progress(record, tested=True, status="verified")
-        return True
-
     def mark_completed(self, level_id: str) -> bool:
         record = self.levels.get(level_id)
-        if not record:
+        if not record or record.get("broken", False):
             return False
 
         self._update_progress(record, tested=True, completed=True, status="verified")
         return True
 
+    def mark_broken(self, level_id: str, reason: str, *, player_id: str, player_name: str, world_id: str, simulation_time: float) -> bool:
+        record = self.levels.get(level_id)
+        if not record or record.get("completed") or record.get("broken"):
+            return False
+        if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 1000:
+            return False
+        report = {"reason": reason.strip(), "player_id": player_id, "player_name": player_name,
+                  "world_id": world_id, "simulation_time": simulation_time,
+                  "reported_at": datetime.now(timezone.utc).isoformat()}
+        self._update_progress(record, broken=True, tested=False, status="broken",
+                              failure_reports=[*record.get("failure_reports", []), report])
+        return True
+
     def _update_progress(self, record, **changes):
-        previous = {key: record[key] for key in changes}
+        previous = {key: copy.deepcopy(record[key]) for key in changes}
         record.update(changes)
         try:
             self.save()

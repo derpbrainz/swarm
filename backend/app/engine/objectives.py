@@ -1,6 +1,7 @@
 """Explicit, finite objective graph and idempotent supported completion effects."""
 
-from backend.app.content import CATALOG, RULES, mutable_copy, validate_objectives
+from backend.app.content import CATALOG, mutable_copy, validate_objectives
+from backend.app.engine import doors
 
 
 def map_objectives(map_data, *, catalog=CATALOG):
@@ -21,9 +22,8 @@ def map_objectives(map_data, *, catalog=CATALOG):
                         "dependencies": required,
                         "effects": [{"handler": effect} for effect in catalog.definitions["missions"][map_data["mission_id"]]["completion_effects"]]})
         map_data["objective_definitions"] = records
-    testing_enemies = set(map_data.get("testing_enemy_ids", [])) if map_data.get("test_mode") else set()
     records = validate_objectives(map_data["objective_definitions"], puzzles={p["id"] for p in puzzles},
-                                  enemies={e["id"] for e in map_data.get("enemies", [])} | testing_enemies, walls={w["id"] for w in map_data["walls"]},
+                                  enemies={e["id"] for e in map_data.get("enemies", [])}, walls={w["id"] for w in map_data["walls"]},
                                   crates={c["id"] for c in map_data.get("crates", [])})
     map_data["objective_definitions"] = records
     map_data["objectives"] = [{"id": r["id"], "label": r["label"], "required": r["required"], "completed": False} for r in records]
@@ -31,10 +31,7 @@ def map_objectives(map_data, *, catalog=CATALOG):
 
 def open_door(room, effect):
     wall = next(w for w in room.map_data["walls"] if w["id"] == effect["target_id"])
-    if wall.get("active", True):
-        wall.update(active=False, blocks_sight=False)
-        room.map_data["geometry_revision"] = room.map_data.get("geometry_revision", 0) + 1
-        room._emit_sound(wall["x"] + wall["w"] / 2, wall["y"] + wall["h"] / 2, 0, "door", sound_type=RULES["audio"]["door_sound"], source_id=wall["id"])
+    doors.open_door(room, wall)
 
 
 def unlock_crate(room, effect):
@@ -67,13 +64,10 @@ def update(room):
             if state["completed"] or not all(states[d]["completed"] for d in record["dependencies"]):
                 continue
             condition = record["condition"]
-            testing_skipped = condition == "enemy_dead" and data.get("test_mode") and record["target_id"] in data.get("testing_enemy_ids", [])
-            satisfied = testing_skipped or condition == "complete" or (condition == "puzzle_solved" and puzzles.get(record["target_id"], {}).get("solved", False)) or (condition == "enemy_dead" and enemies.get(record["target_id"], {}).get("hp", 1) <= 0)
+            satisfied = condition == "complete" or (condition == "puzzle_solved" and puzzles.get(record["target_id"], {}).get("solved", False)) or (condition == "enemy_dead" and enemies.get(record["target_id"], {}).get("hp", 1) <= 0)
             if satisfied:
                 for effect in record["effects"]:
                     EFFECTS[effect["handler"]](room, effect)
                 state["completed"] = True
-                if testing_skipped:
-                    state["testing_skipped"] = True
                 changed = True
                 room.interaction_revision += 1

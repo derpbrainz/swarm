@@ -128,6 +128,7 @@
     <!-- Right-Side Player Inventory Sidebar -->
     <aside id="hud-inventory-sidebar" class="hud-inventory-sidebar">
       <button id="inventory-toggle" type="button" class="btn-secondary inventory-toggle" aria-expanded="false">Show Inventory</button>
+      <button id="report-level-btn" type="button" class="btn-secondary hidden">Report Broken Level</button>
       <div class="inv-sidebar-header">
         <span>OPERATIVE INVENTORY</span>
         <span id="hud-inv-weight" class="inv-weight-badge">0 / 24 WT</span>
@@ -156,6 +157,15 @@
     </div>
 
     <!-- Interactive Puzzle Modal -->
+    <div id="level-report-modal" class="modal-backdrop hidden">
+      <form id="level-report-form" class="modal-card">
+        <div class="modal-header"><h3>Report Broken Level</h3><button id="cancel-level-report" type="button" class="btn-close">Cancel</button></div>
+        <p>Describe what prevents this level from working. Submitting retains the broken map for repair and returns the whole squad to the lobby.</p>
+        <label for="level-report-reason">Failure reason</label>
+        <textarea id="level-report-reason" rows="5" minlength="1" maxlength="1000" required></textarea>
+        <button id="submit-level-report" type="submit" class="btn-primary">Save Report and Return Squad</button>
+      </form>
+    </div>
     <div id="service-modal" class="modal-backdrop hidden">
       <div class="modal-card">
         <div class="modal-header"><h3 id="service-title">Console</h3><button id="close-service-btn" class="btn-close">[ESC]</button></div>
@@ -177,6 +187,7 @@
       <div class="modal-card center-card">
         <h2 id="end-title">EXTRACTION COMPLETE</h2>
         <p id="end-sub"></p>
+        <button id="end-report-level-btn" type="button" class="btn-secondary hidden">Report Broken Level</button>
         <button id="return-lobby-btn" class="btn-primary">RETURN TO COMMAND LOBBY</button>
       </div>
     </div>

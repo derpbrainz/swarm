@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "content_version": "foundation-2",
+  "content_version": "foundation-3",
   "presentation": {
     "assets": {
       "test_floor": {"path": "visual/test-floor.svg"},
@@ -595,6 +595,12 @@
     "power_reroute": {"handler": "power_reroute", "node_count": 4, "allow_tech_bypass": true},
     "signal_decrypt": {"handler": "signal_decrypt", "sequence_length": 4, "symbols": ["A7", "C4", "F9", "E2", "B5", "D8"], "allow_tech_bypass": true}
   },
+  "thresholds": {
+    "open_passage": {"mode": "open"},
+    "automatic_door": {"mode": "proximity", "door_type": "door", "sound_type": "door_operate", "trigger_radius": 2.4},
+    "power_lock": {"mode": "puzzle", "door_type": "door", "sound_type": "door_operate", "puzzle_id": "power_reroute"},
+    "signal_lock": {"mode": "puzzle", "door_type": "door", "sound_type": "door_operate", "puzzle_id": "signal_decrypt"}
+  },
   "attacks": {
     "stalker_claw": {"handler": "melee", "range": 1.2, "damage": 12, "cooldown": 1.2},
     "spitter_acid": {"handler": "projectile", "range": 8.5, "damage": 9, "cooldown": 1.5, "projectile_speed": 9},
@@ -666,7 +672,7 @@
         "command_hub",
         "extraction_pad"
       ],
-      "previous_level_accepts_tested": true,
+      "threshold_weights": {"open_passage": 3, "automatic_door": 3, "power_lock": 1, "signal_lock": 1},
       "completion_effects": ["activate_extraction"]
     },
     "biolab": {
@@ -690,7 +696,7 @@
         "command_hub",
         "extraction_pad"
       ],
-      "previous_level_accepts_tested": false,
+      "threshold_weights": {"open_passage": 2, "automatic_door": 3, "power_lock": 1, "signal_lock": 2},
       "completion_effects": ["activate_extraction"]
     },
     "reactor": {
@@ -718,7 +724,7 @@
         "command_hub",
         "extraction_pad"
       ],
-      "previous_level_accepts_tested": false,
+      "threshold_weights": {"open_passage": 2, "automatic_door": 2, "power_lock": 2, "signal_lock": 1},
       "completion_effects": ["activate_extraction"]
     }
   },

@@ -5,6 +5,7 @@ import uuid
 from backend.app.content import mutable_copy
 from backend.app.engine.props import instantiate_props, world_surfaces
 from backend.app.engine.physics import circle_vs_aabb
+from backend.app.engine.doors import configure_threshold
 
 
 def instantiate_world(identity, catalog):
@@ -20,6 +21,9 @@ def instantiate_world(identity, catalog):
              "player_spawn_points": [(p["x"], p["y"]) for p in definition["spawns"]],
              "enemies": [], "loot": [], "crates": [], "objective_definitions": []}
     radius = catalog.definitions["rules"]["player"]["radius"]
+    for wall in world["walls"]:
+        if "threshold_id" in wall:
+            configure_threshold(wall, catalog)
     for x, y in world["player_spawn_points"]:
         if any(w.get("active", True) and w.get("blocks_movement", True) and circle_vs_aabb(x, y, radius, w)[2] for w in world_surfaces(world)):
             raise ValueError(f"worlds.{identity}.spawns: blocked player spawn")

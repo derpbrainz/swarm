@@ -135,3 +135,23 @@ test('asset constructor failure has explicit fallback and late callbacks cannot 
   cache.dispose(); late(); await entry.promise;
   assert.equal(entry.state, 'disposed');
 });
+
+test('wall exploration is shared, retained outside sight, and reset by world or explicit teardown', () => {
+  const context = new Proxy({ measureText: () => ({ width: 10 }) }, { get: (o, key) => o[key] || (() => {}) });
+  globalThis.document = { createElement: () => ({ width: 1280, height: 720, getContext: () => context }) };
+  const renderer = new IsometricRenderer({ width: 1280, height: 720, getContext: () => context });
+  const s = structuredClone(state);
+  renderer.render(s, 'actor', null, camera);
+  const remembered = [...renderer.exploredWalls];
+  assert.ok(remembered.length > 0);
+  s.players = [];
+  renderer.render(s, '', null, camera);
+  assert.deepEqual([...renderer.exploredWalls], remembered);
+  s.world_id = 'different-world';
+  renderer.render(s, '', null, camera);
+  assert.equal(renderer.exploredWalls.size, 0);
+  renderer.exploredWalls.add('remembered-piece');
+  renderer.resetExplored();
+  assert.equal(renderer.exploredWalls.size, 0);
+  renderer.dispose();
+});

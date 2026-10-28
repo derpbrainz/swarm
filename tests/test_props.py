@@ -25,7 +25,7 @@ def test_data_only_spawn_visual_swap_and_no_default_placements(game_room, monkey
     assert props[-1]["geometry"] == original[-1]["geometry"]
     assert {p["archetype"] for p in props} == {"chair", "table", "console"}
     assert all(not s["props"] for s in CATALOG.definitions["segments"].values())
-    assert game_room.start_mission(game_room.add_player("p")["id"], False)
+    assert game_room.start_mission(game_room.add_player("p")["id"])
     assert not game_room.map_data.get("props")
     assert not game_room.get_snapshot("p")["map"]["props"]
     from backend.app.engine import map_builder
@@ -57,7 +57,7 @@ def test_blocking_nonblocking_independent_geometry_and_orientation():
 def test_authoritative_movement_projectile_interaction_and_pure_snapshot(game_room):
     p = game_room.add_player("p")
     game_room.select_class("p", "tech")
-    game_room.start_mission("p", False)
+    game_room.start_mission("p")
     game_room.phase = "active"
     props, puzzles = fixture_props()
     game_room.map_data.update(walls=[], enemies=[], loot=[], crates=[], props=props, puzzles=puzzles)

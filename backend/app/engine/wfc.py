@@ -8,7 +8,7 @@ from backend.app.content import CATALOG
 
 DIRS = {"N": (0, -1, "S"), "S": (0, 1, "N"), "E": (1, 0, "W"), "W": (-1, 0, "E")}
 EMPTY = "EMPTY"
-GENERATOR_VERSION = "wfc-2"
+GENERATOR_VERSION = "wfc-3"
 MAX_ATTEMPTS = 400
 
 

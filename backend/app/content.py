@@ -298,6 +298,27 @@ class Enemy(Definition):
     encounter_id: Id | None = None
 
 
+class OpenThreshold(Definition):
+    mode: Literal["open"]
+
+
+class ProximityThreshold(Definition):
+    mode: Literal["proximity"]
+    door_type: Literal["door"]
+    sound_type: Id
+    trigger_radius: Positive
+
+
+class PuzzleThreshold(Definition):
+    mode: Literal["puzzle"]
+    door_type: Literal["door"]
+    sound_type: Id
+    puzzle_id: Id
+
+
+Threshold = Annotated[OpenThreshold | ProximityThreshold | PuzzleThreshold, Field(discriminator="mode")]
+
+
 class Mission(Definition):
     id: Id
     name: Text
@@ -312,9 +333,9 @@ class Mission(Definition):
     max_segments: Count
     allowed_templates: Annotated[list[Id], Field(min_length=1)]
     required_templates: list[Id]
-    previous_level_accepts_tested: bool
     completion_effects: Annotated[list[Literal["activate_extraction"]], Field(max_length=1)]
     objectives: Annotated[list[Objective], Field(max_length=128)] = []
+    threshold_weights: Annotated[dict[Id, Nonnegative], Field(min_length=1, max_length=128)]
 
 
 class Port(Definition):
@@ -335,6 +356,7 @@ class Wall(Point):
     active: bool = True
     is_door: bool = False
     material: Literal["solid", "door", "transparent"] = "solid"
+    threshold_id: Id | None = None
 
 
 class PuzzleSlot(Point):
@@ -618,6 +640,7 @@ class CatalogSchema(Definition):
     presentation: Presentation
     props: dict[Id, Prop]
     puzzles: dict[Id, PuzzleDefinition]
+    thresholds: Annotated[dict[Id, Threshold], Field(min_length=1, max_length=128)]
     attacks: dict[Id, Attack]
     encounters: dict[Id, Encounter]
     world_rules: dict[Id, WorldCapabilities]
@@ -631,6 +654,23 @@ class CatalogSchema(Definition):
 
         def reference(identity, registry, path):
             require(identity in registry, path, f"unknown reference {identity!r}")
+
+        for identity, threshold in self.thresholds.items():
+            path = f"thresholds.{identity}"
+            if threshold.mode != "open":
+                reference(threshold.sound_type, self.sounds, path + ".sound_type")
+                sound = self.sounds[threshold.sound_type]
+                require(sound.category == "door_operate" and not sound.loop, path + ".sound_type", "requires one-shot door sound")
+            if threshold.mode == "proximity":
+                require(threshold.trigger_radius > self.rules.player.radius, path + ".trigger_radius", "must exceed player collision radius")
+            if threshold.mode == "puzzle":
+                reference(threshold.puzzle_id, self.puzzles, path + ".puzzle_id")
+
+        def wall_threshold(wall, path):
+            if wall.threshold_id is not None:
+                reference(wall.threshold_id, self.thresholds, path + ".threshold_id")
+                require(self.thresholds[wall.threshold_id].mode == "proximity", path + ".threshold_id", "standalone walls require proximity policy")
+                require(wall.is_door and wall.active and wall.blocks_sight and wall.material == "door", path, "threshold wall must be a closed blocking door")
 
         presentation = self.presentation
         require(set(presentation.defaults) == {"wall", "player", "enemy", "turret", "loot", "crate", "puzzle"}, "presentation.defaults", "all physical kinds required")
@@ -665,6 +705,7 @@ class CatalogSchema(Definition):
             for tile in world.tiles:
                 require(tile.x >= 0 and tile.y >= 0 and tile.x + tile.w <= world.width and tile.y + tile.h <= world.height, path + ".tiles", "tile outside world")
             for wall in world.walls:
+                wall_threshold(wall, path + ".walls")
                 require(wall.x + wall.w <= world.width and wall.y + wall.h <= world.height, path + ".walls", "wall outside world")
             for placement in world.props:
                 reference(placement.archetype, self.props, path + ".props.archetype")
@@ -751,6 +792,9 @@ class CatalogSchema(Definition):
         require(set(self.music.tracks) == {"explore", "combat"}, "music.tracks", "both currently consumed music states are required")
         for identity, mission in self.missions.items():
             path = f"missions.{identity}"
+            require(sum(mission.threshold_weights.values()) > 0, path + ".threshold_weights", "positive total weight required")
+            for threshold_id in mission.threshold_weights:
+                reference(threshold_id, self.thresholds, path + ".threshold_weights")
             authored_objectives = [o.model_dump(exclude_none=True) for o in mission.objectives]
             validate_objectives(authored_objectives,
                                 puzzles={o.target_id for o in mission.objectives if o.condition == "puzzle_solved"},
@@ -824,6 +868,8 @@ class CatalogSchema(Definition):
                     if isinstance(point, EnemySpawn):
                         reference(point.type, self.enemies, pp + ".type")
                         require(0 <= point.x + point.patrol_dx <= segment.width and 0 <= point.y + point.patrol_dy <= segment.height, pp, "patrol endpoint outside segment")
+                    if isinstance(point, Wall):
+                        wall_threshold(point, pp)
                     if isinstance(point, PuzzleSlot):
                         reference(point.type, self.puzzles, pp + ".type")
                     if isinstance(point, LootSpawn):

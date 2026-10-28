@@ -64,6 +64,8 @@ def move_with_collisions(
     dt: float,
     radius: float,
     walls: list[dict],
+    *,
+    before_step=None,
 ) -> tuple[float, float]:
     """
     Move a circle by velocity * dt and resolve circle-vs-AABB collisions
@@ -78,6 +80,8 @@ def move_with_collisions(
     step_dy = total_dy / steps
 
     for _ in range(steps):
+        if before_step is not None:
+            before_step(x, y)
         x += step_dx
         y += step_dy
         for _ in range(2):

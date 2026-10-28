@@ -12,3 +12,5 @@ playwright-report/
 build/
 dist/
 .swarm-saves/
+backend/app/data/*.bak
+backend/app/data/*.lock

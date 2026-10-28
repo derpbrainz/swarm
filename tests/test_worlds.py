@@ -34,7 +34,7 @@ def depart(room):
     assert room.prepare_mission("leader", target)
     room.toggle_ready("leader", True)
     room.toggle_ready("peer", True)
-    assert room.start_mission("leader", False, target)
+    assert room.start_mission("leader", target)
     room.map_data.update(enemies=[], puzzles=[], objective_definitions=[], objectives=[], walls=[],
                          props=[], crates=[], loot=[], extraction_zone={"x": 10, "y": 10, "w": 4, "h": 4, "active": True})
     room.phase = "active"
@@ -134,7 +134,7 @@ def test_hub_commands_cannot_mutate_combat_or_consume_items(hub, action):
 def test_hub_ticks_disable_hostile_ai_damage_cooldowns_and_failure(hub):
     depart(hub)
     # Use an actual mission enemy, rather than an incomplete mock actor.
-    enemy = copy.deepcopy(hub.level_store.instantiate_map("outpost_101", False)["enemies"][0])
+    enemy = copy.deepcopy(hub.level_store.instantiate_map("outpost_101")["enemies"][0])
     hub.reset_to_lobby()
     p = hub.players["leader"]
     enemy.update(x=p["x"], y=p["y"], state="engaged", attack_cooldown=1)
@@ -162,7 +162,7 @@ def test_console_target_reach_los_and_leader_policy(hub):
     assert not hub.stash_to_player("leader", "medkit", target_id=target)["ok"]
     target = service(hub, "mission_selection")
     assert not hub.prepare_mission("peer", target)
-    assert not hub.start_mission("leader", False, target)
+    assert not hub.start_mission("leader", target)
     hub.map_data["walls"].append({"id": "blocking", "x": 10, "y": 8, "w": 3, "h": .1, "blocks_sight": True})
     assert not hub.prepare_mission("leader", target)
     assert totals(hub) == before
@@ -180,7 +180,7 @@ def test_shared_preparation_and_explicit_departure(hub):
     world = hub.map_data["world_id"]
     hub.step(100)
     assert hub.phase == "prep" and hub.map_data["world_id"] == world
-    assert hub.start_mission("leader", False, target)
+    assert hub.start_mission("leader", target)
     assert hub.phase == "dropship" and hub.map_data["world_kind"] == "mission"
     assert hub.world_capabilities["combat"] and hub.world_capabilities["beneficial_use"] == "normal"
     assert hub.map_data["world_id"] != world

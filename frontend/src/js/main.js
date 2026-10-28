@@ -26,8 +26,8 @@ let lastHudInvSig = '';
 let lastServiceSig = '';
 
 const input = new InputContext(send, () => Boolean(state?.map && getLocalPlayer()?.capabilities?.can_move &&
-  !modals.active && !modals.pending && classModal.classList.contains('hidden') && !getLocalPlayer()?.downed),
-  () => mouseWorld, () => (modals.active || modals.pending) ? modals.close() : false,
+  !levelReport && !modals.active && !modals.pending && classModal.classList.contains('hidden') && !getLocalPlayer()?.downed),
+  () => mouseWorld, () => levelReport ? closeLevelReport() : (modals.active || modals.pending) ? modals.close() : false,
   () => modals.request({ type: 'interact' }));
 const keys = input.keys;
 const modals = new InteractionModal(send, active => {
@@ -126,6 +126,38 @@ const endBanner = document.getElementById('end-banner');
 const endTitle = document.getElementById('end-title');
 const endSub = document.getElementById('end-sub');
 const returnLobbyBtn = document.getElementById('return-lobby-btn');
+const reportLevelBtn = document.getElementById('report-level-btn');
+const endReportLevelBtn = document.getElementById('end-report-level-btn');
+const reportModal = document.getElementById('level-report-modal');
+const reportReason = document.getElementById('level-report-reason');
+const reportSubmit = document.getElementById('submit-level-report');
+let levelReport = null;
+
+function closeLevelReport() {
+  levelReport = null;
+  reportModal.classList.add('hidden');
+  reportSubmit.disabled = false;
+  input.reset();
+  return true;
+}
+function openLevelReport() {
+  if (!state?.map?.can_report_broken) return;
+  modals.close();
+  levelReport = { level_id: state.map.level_id, world_id: state.world_id };
+  reportReason.value = '';
+  reportModal.classList.remove('hidden');
+  input.reset();
+  reportReason.focus();
+}
+reportLevelBtn.addEventListener('click', openLevelReport);
+endReportLevelBtn.addEventListener('click', openLevelReport);
+document.getElementById('cancel-level-report').addEventListener('click', closeLevelReport);
+document.getElementById('level-report-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const reason = reportReason.value.trim();
+  if (!levelReport || !reason) return;
+  if (send({ type: 'report_broken_level', ...levelReport, reason })) reportSubmit.disabled = true;
+});
 
 // Puzzle Modal Elements
 const puzzleModal = document.getElementById('puzzle-modal');
@@ -144,7 +176,8 @@ window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
 function send(payload) {
-  if (state?.map && (modals.active || modals.pending) && ['reload', 'skill', 'inventory_action'].includes(payload.type)) return false;
+  if (state?.map && (levelReport || modals.active || modals.pending) && ['reload', 'skill', 'inventory_action'].includes(payload.type)) return false;
+  if (levelReport && payload.type === 'interact') return false;
   if (state?.map && !state.world_capabilities?.combat && ['reload', 'skill'].includes(payload.type)) return false;
   if (payload.type === 'input' && payload.firing && state?.map && !state.world_capabilities?.combat) payload = { ...payload, firing: false };
   return session.send(payload);
@@ -175,7 +208,12 @@ const session = new ClientSession(msg => {
       }
       updateScreens(true);
       maybeShowClassModal();
+    } else if (msg.type === 'level_report_feedback') {
+      showFeedback(msg.message);
+      if (msg.ok) closeLevelReport();
+      else reportSubmit.disabled = false;
     } else if (msg.type === 'command_error' || msg.type === 'inventory_feedback') {
+      if (levelReport) reportSubmit.disabled = false;
       const current = !msg.request_id || modals.receive(msg);
       if (current && (msg.ok === false || msg.type === 'command_error')) {
         console.warn(msg.message || msg.reason || 'Command rejected');
@@ -199,6 +237,7 @@ const session = new ClientSession(msg => {
     modals.close();
     input.reset();
     state = null;
+    closeLevelReport();
     localPlayerId = null;
     renderer.resetExplored();
     renderer.scene = [];
@@ -206,6 +245,7 @@ const session = new ClientSession(msg => {
   });
 
 function updateScreens(worldChanged) {
+  if (levelReport && (state.world_id !== levelReport.world_id || !state.map?.can_report_broken)) closeLevelReport();
   if (!state.map) {
     gameScreen.classList.add('hidden');
     puzzleModal.classList.add('hidden');
@@ -370,7 +410,7 @@ function renderLobbyUI(force = false) {
     localLock: localLockNotice,
     stash: state.shared_stash || [],
     players: (state.players || []).map((p) => [p.id, p.name, p.class_id, p.class_chosen]),
-    levels: (state.levels || []).map((l) => [l.level_id, l.tested, l.completed, l.unlocked, l.lock_reason]),
+    levels: (state.levels || []).map((l) => [l.level_id, l.broken, l.completed, l.unlocked, l.lock_reason, l.failure_reports]),
   });
   if (!force && sig === lastLobbySig) return;
   lastLobbySig = sig;
@@ -458,17 +498,17 @@ function renderLobbyUI(force = false) {
         const isUnlocked = lvl.unlocked !== false;
         let statusLabel = '';
         let statusColor = '#34d399';
-        if (!isUnlocked) {
+        if (lvl.broken) {
+          statusLabel = 'BROKEN - RETAINED FOR REPAIR';
+          statusColor = '#f87171';
+        } else if (!isUnlocked) {
           statusLabel = '🔒 LOCKED';
           statusColor = '#f87171';
         } else if (lvl.completed) {
           statusLabel = isSel ? '✓ SELECTED • ★ COMPLETED' : '★ COMPLETED';
           statusColor = '#34d399';
-        } else if (lvl.tested) {
-          statusLabel = isSel ? '✓ SELECTED • COMBAT READY' : '✓ VERIFIED (COMBAT)';
-          statusColor = '#38bdf8';
         } else {
-          statusLabel = isSel ? '✓ SELECTED • TESTING PHASE' : '⚠ TESTING PHASE';
+          statusLabel = isSel ? 'SELECTED - NOT YET COMPLETED' : 'NOT YET COMPLETED';
           statusColor = '#fbbf24';
         }
         const sizes = Array.from(
@@ -484,6 +524,7 @@ function renderLobbyUI(force = false) {
               <strong>${lvl.name}</strong> <span style="color:#94a3b8">(Seed ${lvl.seed})</span><br/>
               <span style="color:#94a3b8">${lvl.segment_count} Segments (${sizes}) • ${lvl.connector_count} Connectors</span>
               ${reqHtml}
+              ${lvl.broken ? html`<div style="color:#fca5a5;margin-top:4px;">Report: ${lvl.failure_reports?.at(-1)?.reason || 'Awaiting repair'}</div>` : ''}
             </div>
             <span style="color:${statusColor};font-weight:700;font-size:0.72rem;text-align:right;">${statusLabel}</span>
           </div>
@@ -501,7 +542,7 @@ function renderLobbyUI(force = false) {
       <div class="segments-preview">${levelsHtml}</div>
       ${
         isLeader && anyMissionUnlocked
-          ? html`<button class="btn-secondary gen-level-btn" data-mission-id="${m.id}" style="margin-top:8px;width:100%;font-size:0.78rem;border-color:#38bdf8;color:#38bdf8;">+ GENERATE NEW WFC LEVEL (ENTERS TESTING PHASE)</button>`
+          ? html`<button class="btn-secondary gen-level-btn" data-mission-id="${m.id}" style="margin-top:8px;width:100%;font-size:0.78rem;border-color:#38bdf8;color:#38bdf8;">+ GENERATE NEW LEVEL (NOT YET COMPLETED)</button>`
           : ''
       }
     `;
@@ -559,8 +600,8 @@ function renderLobbyUI(force = false) {
   launchBtn.disabled = !isLeader || (selectedLevel && selectedLevel.unlocked === false);
   if (!isLeader) {
     launchBtn.textContent = 'WAITING FOR LEADER TO PREPARE...';
-  } else if (selectedLevel && !selectedLevel.tested) {
-    launchBtn.textContent = `PREPARE TO LAUNCH: ${selectedLevel.name.toUpperCase()} (TESTING PHASE)`;
+  } else if (selectedLevel && !selectedLevel.completed) {
+    launchBtn.textContent = `PREPARE TO LAUNCH: ${selectedLevel.name.toUpperCase()} (NOT YET COMPLETED)`;
   } else if (selectedLevel) {
     launchBtn.textContent = `PREPARE TO LAUNCH: ${selectedLevel.name.toUpperCase()}`;
   } else {
@@ -738,10 +779,11 @@ function renderPrepUI(force = false) {
 function updateHUD() {
   if (!state || !state.map) return;
   const me = getLocalPlayer();
-  const isTest = Boolean(state.map.test_mode);
-  const titlePrefix = isTest ? '[TESTING PHASE — NO ENEMIES/LOOT] ' : '';
+   const titlePrefix = state.world_kind === 'mission' && !state.map.level_completed ? '[NOT YET COMPLETED] ' : '';
   hudMissionTitle.textContent = `${titlePrefix}${state.map.level_name || state.map.world_name || state.map.mission_name} (${state.map.segments.length} Sectors)`;
   const hub = state.world_kind === 'hub';
+  reportLevelBtn.classList.toggle('hidden', !state.map.can_report_broken);
+  endReportLevelBtn.classList.toggle('hidden', !state.map.can_report_broken);
   document.getElementById('hub-controls').classList.toggle('hidden', !hub);
   document.getElementById('hub-ready-btn').textContent = me?.ready ? 'Cancel Ready' : 'Ready Up';
   document.getElementById('hub-ready-btn').disabled = state.phase !== 'prep';
@@ -755,10 +797,9 @@ function updateHUD() {
     hudObjectiveText.textContent = `Dropship docking... Ramp opens in ${state.dropship_timer}s`;
   } else if (solvedCount < objectives.length) {
     const nextObjective = objectives.find((p) => !p.completed);
-    hudObjectiveText.textContent = `${isTest ? 'Test ' : ''}Objective (${solvedCount}/${objectives.length}): ${nextObjective.label}`;
+    hudObjectiveText.textContent = `Objective (${solvedCount}/${objectives.length}): ${nextObjective.label}`;
   } else {
-    hudObjectiveText.textContent = !state.world_capabilities?.extraction ? 'WORLD OBJECTIVES COMPLETE' : isTest
-      ? 'TEST OBJECTIVES UNLOCKED — Reach Extraction Pad to Verify Level!'
+    hudObjectiveText.textContent = !state.world_capabilities?.extraction ? 'WORLD OBJECTIVES COMPLETE'
       : 'PRIMARY COMPLETE — All operatives proceed to Extraction Pad!';
   }
 
@@ -802,12 +843,7 @@ function updateHUD() {
   // Victory / Defeat banner
   if (state.phase === 'victory' || state.phase === 'defeat') {
     endBanner.classList.remove('hidden');
-    if (state.phase === 'victory' && isTest) {
-      endTitle.textContent = 'LEVEL TEST PASSED — LEVEL VERIFIED';
-    } else {
-      endTitle.textContent =
-        state.phase === 'victory' ? 'EXTRACTION SUCCESSFUL' : 'SQUAD WIPE — MISSION FAILED';
-    }
+    endTitle.textContent = state.phase === 'victory' ? 'EXTRACTION SUCCESSFUL - LEVEL TEST PASSED' : 'SQUAD WIPE - MISSION FAILED';
     endTitle.style.color = state.phase === 'victory' ? '#34d399' : '#f87171';
     endSub.textContent = `Mission Time: ${state.mission_time}s`;
   } else {

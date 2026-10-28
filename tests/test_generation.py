@@ -142,14 +142,14 @@ def test_player_radius_catalog_controls_actual_validation(generated, monkeypatch
 
 
 def test_geometry_validation_is_distinct_from_testing_progress(game_room):
-    record = game_room.level_store.generate_level("outpost", 101, tested=False)
+    record = game_room.level_store.generate_level("outpost", 101)
     assert record["geometry_validated"] and not record["tested"] and not record["completed"]
-    assert record["status"] == "testing"
-    assert game_room.level_store.instantiate_map(record["level_id"])["test_mode"]
+    assert record["status"] == "uncompleted"
+    assert game_room.level_store.instantiate_map(record["level_id"])["enemies"]
     original = copy.deepcopy(record["map_template"])
-    game_room.level_store.mark_tested(record["level_id"])
+    game_room.level_store.mark_completed(record["level_id"])
     assert record["map_template"] == original
-    assert record["tested"] and not record["completed"]
+    assert record["tested"] and record["completed"]
 
 
 def test_wfc_alone_has_stable_authoritative_counts():
@@ -206,13 +206,13 @@ def test_legacy_sparse_snapshot_repeated_launches_never_regenerate_or_write(game
         pytest.fail("snapshot launch attempted regeneration or persistence")
     monkeypatch.setattr(store, "save", forbidden)
     monkeypatch.setattr("backend.app.engine.level_store.build_mission_map", forbidden)
-    assert not verify_level_solvability(record["map_template"])  # Legacy is not automatically repaired.
+    assert verify_level_solvability(record["map_template"])  # Sparse loot does not invalidate geometry.
     game_room.add_player("p")
     runtime_ids = set()
     for _ in range(3):
-        assert game_room.start_mission("p", False)
+        assert game_room.start_mission("p")
         snapshot = game_room.map_data
-        assert [{k: v for k, v in wall.items() if k not in ("is_door", "material")} for wall in snapshot["walls"]] == record["map_template"]["walls"]
+        assert [{k: v for k, v in wall.items() if k not in ("is_door", "material")} for wall in snapshot["walls"]] == [{k: v for k, v in wall.items() if k not in ("is_door", "material")} for wall in record["map_template"]["walls"]]
         for item in snapshot["loot"]:
             assert item["id"] not in runtime_ids
             runtime_ids.add(item["id"])
@@ -234,7 +234,7 @@ def test_generated_zero_loot_uses_catalog_and_keeps_snapshot(tmp_path, monkeypat
     assert record["map_template"]["loot"] == record["map_template"]["crates"] == []
     before = store.data_file.read_bytes()
     for _ in range(2):
-        assert store.instantiate_map(record["level_id"], False)["loot"] == []
+        assert store.instantiate_map(record["level_id"])["loot"] == []
     assert store.data_file.read_bytes() == before
 
 
@@ -248,7 +248,7 @@ def test_content_upgrade_does_not_revalidate_or_regenerate_saved_layout(game_roo
         pytest.fail("content upgrade implicitly validated/repaired a retained snapshot")
     monkeypatch.setattr("backend.app.engine.level_store.validate_generated_map", forbidden)
     monkeypatch.setattr(game_room.level_store, "save", forbidden)
-    game_room.level_store.instantiate_map("outpost_101", False)
+    game_room.level_store.instantiate_map("outpost_101")
     assert record == before
 
 

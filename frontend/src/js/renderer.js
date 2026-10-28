@@ -3,10 +3,15 @@
  * 3D-extruded walls/doors, Spaceship drop bay, sight cones, and sound rings.
  */
 
-import { TILE_W, TILE_H, WALL_HEIGHT_PX, worldToIso, computeVisibilityPolygon, pointInPolygon } from './iso.js';
+import { TILE_W, TILE_H, WALL_HEIGHT_PX, worldToIso, computeVisibilityPolygon, pointInPolygon, segmentIntersectsAABB } from './iso.js';
 import { playerSightRange } from './content.js';
 import { AssetCache } from './assets.js';
 import { buildScene, sceneOccluders } from './scene.js';
+
+function wallRenderHeight(wall) {
+  return wall.render_height ?? (wall.type === 'cover' ? WALL_HEIGHT_PX * 0.45 :
+    wall.type === 'ship_ramp' ? WALL_HEIGHT_PX * 0.35 : WALL_HEIGHT_PX);
+}
 
 export class IsometricRenderer {
   constructor(canvas, classesConfig = {}) {
@@ -15,6 +20,7 @@ export class IsometricRenderer {
     this.classesConfig = classesConfig;
     this.itemsConfig = {};
     this.exploredCells = new Set();
+    this.exploredWalls = new Set();
     this.lastMissionId = null;
     this.fogCanvas = document.createElement('canvas');
     this.fogCtx = this.fogCanvas.getContext('2d');
@@ -29,6 +35,7 @@ export class IsometricRenderer {
 
   resetExplored() {
     this.exploredCells.clear();
+    this.exploredWalls.clear();
     this.currentCells.clear();
     this.playerAnim.clear();
   }
@@ -656,12 +663,7 @@ export class IsometricRenderer {
   }
 
   drawIsoBox(ctx, wall, camera) {
-    const hPx = wall.render_height ?? (
-      wall.type === 'cover'
-        ? WALL_HEIGHT_PX * 0.45
-        : wall.type === 'ship_ramp'
-        ? WALL_HEIGHT_PX * 0.35
-         : WALL_HEIGHT_PX);
+    const hPx = wallRenderHeight(wall);
 
     const p0 = worldToIso(wall.x, wall.y, camera);
     const p1 = worldToIso(wall.x + wall.w, wall.y, camera);
@@ -1247,28 +1249,61 @@ export class IsometricRenderer {
     fctx.fillStyle = 'rgba(4, 7, 13, 0.98)';
     fctx.fillRect(0, 0, W, H);
 
-    // Previously seen floor cells remain dim; unknown floor is almost opaque.
-    fctx.globalCompositeOperation = 'destination-out';
-    for (const key of this.exploredCells) {
-      const [x, y] = key.split(',').map(Number);
-      this.drawIsoQuad(fctx, x, y, 2, 2, camera, 'rgba(0, 0, 0, 0.37)');
+    // Floor LOS ends at a wall's base. Its raised silhouette must also be
+    // revealed, otherwise the shroud hides walls on the upper screen side.
+    const occluders = sceneOccluders(map);
+    const wallSilhouettes = [];
+    for (const entity of this.scene) {
+      if (entity.kind !== 'wall') continue;
+      const wall = entity.source;
+      const corners = [[wall.x, wall.y], [wall.x + wall.w, wall.y],
+        [wall.x + wall.w, wall.y + wall.h], [wall.x, wall.y + wall.h]];
+      const visible = visions.some(({ player, range, poly }) => {
+        const closest = [Math.max(wall.x, Math.min(player.x, wall.x + wall.w)),
+          Math.max(wall.y, Math.min(player.y, wall.y + wall.h))];
+        const contacts = poly.filter(point => point.x >= wall.x - 1e-6 && point.x <= wall.x + wall.w + 1e-6 &&
+          point.y >= wall.y - 1e-6 && point.y <= wall.y + wall.h + 1e-6).map(point => [point.x, point.y]);
+        return [closest, ...corners, ...contacts].some(([x, y]) =>
+          Math.hypot(x - player.x, y - player.y) <= range && !occluders.some(surface => {
+            if (surface.active === false || surface.blocks_sight === false) return false;
+            const hit = segmentIntersectsAABB(player.x, player.y, x, y, surface);
+            return hit !== null && hit < 1 - 1e-6;
+          }));
+      });
+      if (visible) this.exploredWalls.add(entity.id);
+      if (!this.exploredWalls.has(entity.id)) continue;
+      const visual = wall.visual_id ? this.presentation?.visuals[entity.visualId] : null;
+      const height = wallRenderHeight({ ...wall, ...(visual ? { render_height: visual.elevation } : {}) });
+      const [p0, p1, p2, p3] = corners.map(([x, y]) => worldToIso(x, y, camera));
+      wallSilhouettes.push({ visible, points: [{ x: p0.x, y: p0.y - height },
+        { x: p1.x, y: p1.y - height }, p1, p2, p3, { x: p3.x, y: p3.y - height }] });
     }
 
-    // Cut out active line-of-sight polygons for all players
-    fctx.globalCompositeOperation = 'destination-out';
-    for (const v of visions) {
-      if (!v.poly || v.poly.length < 3) continue;
-      fctx.beginPath();
-      const first = worldToIso(v.poly[0].x, v.poly[0].y, camera);
-      fctx.moveTo(first.x, first.y);
-      for (let i = 1; i < v.poly.length; i++) {
-        const pt = worldToIso(v.poly[i].x, v.poly[i].y, camera);
-        fctx.lineTo(pt.x, pt.y);
-      }
+    const tracePolygon = points => {
+      fctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) fctx.lineTo(points[i].x, points[i].y);
       fctx.closePath();
-      fctx.fillStyle = 'rgba(0, 0, 0, 1)';
-      fctx.fill();
+    };
+    // One combined mask keeps overlapping remembered floor/wall surfaces
+    // uniformly dim instead of repeatedly subtracting fog at their seams.
+    fctx.globalCompositeOperation = 'destination-out';
+    fctx.beginPath();
+    for (const key of this.exploredCells) {
+      const [x, y] = key.split(',').map(Number);
+      tracePolygon([[x, y], [x + 2, y], [x + 2, y + 2], [x, y + 2]]
+        .map(([wx, wy]) => worldToIso(wx, wy, camera)));
     }
+    for (const wall of wallSilhouettes) tracePolygon(wall.points);
+    fctx.fillStyle = 'rgba(0, 0, 0, 0.37)';
+    fctx.fill();
+
+    fctx.beginPath();
+    for (const vision of visions) {
+      if (vision.poly?.length >= 3) tracePolygon(vision.poly.map(point => worldToIso(point.x, point.y, camera)));
+    }
+    for (const wall of wallSilhouettes) if (wall.visible) tracePolygon(wall.points);
+    fctx.fillStyle = 'rgba(0, 0, 0, 1)';
+    fctx.fill();
     fctx.globalCompositeOperation = 'source-over';
 
     ctx.drawImage(this.fogCanvas, 0, 0, W, H);

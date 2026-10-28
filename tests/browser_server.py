@@ -17,6 +17,7 @@ from backend.app.main import create_app
 from backend.app.content import CATALOG, mutable_copy, validate_content
 from backend.app.engine.props import instantiate_props
 from backend.app.engine.puzzles import generate as generate_puzzle, runtime_puzzle
+from backend.app.engine.doors import configure_threshold
 
 
 if __name__ == "__main__":
@@ -61,7 +62,11 @@ if __name__ == "__main__":
                 for p in room.players.values():
                     room.damage(p, p["max_hp"] + 1, None)
                 room.step(1 / 30)
-            elif action in ("install", "install_visual", "install_encounter"):
+            elif action == "restore_report":
+                room.level_store.levels["outpost_101"].update(completed=False, tested=False, broken=False, failure_reports=[], status="uncompleted")
+                room.selected_level_id = "outpost_101"
+                room.selected_mission_id = "outpost"
+            elif action in ("install", "install_visual", "install_encounter", "install_threshold", "install_report"):
                 if not room.players:
                     raise HTTPException(409)
                 if room.hub_world:
@@ -69,7 +74,12 @@ if __name__ == "__main__":
                     room.reset_to_lobby()
                 if room.phase != "lobby":
                     room.reset_to_lobby()
-                room.start_mission(room.leader_id, False)
+                room.selected_level_id = "outpost_101"
+                room.selected_mission_id = "outpost"
+                if action == "install_report":
+                    room.selected_level_id = "outpost_101"
+                    room.level_store.levels["outpost_101"].update(completed=False, tested=False, broken=False, failure_reports=[], status="uncompleted")
+                room.start_mission(room.leader_id)
                 room.phase = "active"
                 room.map_data["walls"] = []
                 room.map_data["enemies"] = []
@@ -92,7 +102,16 @@ if __name__ == "__main__":
                 room.map_data["props"] = []
                 for key in ("objectives", "objective_definitions"):
                     room.map_data.pop(key, None)
-                if action == "install_visual":
+                if action == "install_threshold":
+                    door = {"id": "fixture-proximity", "threshold_id": "automatic_door", "x": 12,
+                            "y": 6, "w": .8, "h": 8, "active": True, "blocks_sight": True}
+                    configure_threshold(door, room.catalog)
+                    room.map_data.update(walls=[door], puzzles=[], crates=[], loot=[], props=[],
+                                         objective_definitions=[], objectives=[], geometry_revision=0)
+                    room.map_data["capabilities"].update(extraction=False, failure=False, ai=False)
+                    for player in room.players.values():
+                        player.update(x=8.0, y=10.0)
+                elif action == "install_visual":
                     authored = json.loads((Path(__file__).parent / "fixtures" / "stage10-props.json").read_text())
                     content = mutable_copy(CATALOG.definitions)
                     content["props"]["console"]["visual_id"] = authored["console_visual"]

@@ -13,6 +13,7 @@ from backend.app.content import CATALOG, RULES, mutable_copy
 from backend.app.config.missions import CELL_SIZE, CONNECTOR_OFFSET, CONNECTOR_WIDTH, MISSIONS, SEGMENT_TEMPLATES
 from backend.app.engine.physics import collision_path_clear, point_in_rect
 from backend.app.engine.props import instantiate_props, world_surfaces
+from backend.app.engine.doors import configure_threshold, distance_to_door
 from backend.app.engine.puzzles import generate as generate_puzzle
 from backend.app.engine.wfc import DIRS, GENERATOR_VERSION, MAX_ATTEMPTS, GenerationError, _try_seed, run_wfc
 
@@ -85,6 +86,9 @@ def build_wfc_map(mission_id: str, seed: int = 42, *, layout: dict | None = None
     wfc = layout if layout is not None else run_wfc(mission_id, seed)
     rng = random.Random(wfc["seed"])
     mission = MISSIONS[mission_id]
+    threshold_ids = sorted(mission["threshold_weights"])
+    threshold_rng = random.Random(f"{wfc['seed']}:thresholds")
+    threshold_choices = threshold_rng.choices(threshold_ids, weights=[mission["threshold_weights"][t] for t in threshold_ids], k=len(wfc["connectors"]))
     enemy_mult = float(mission["enemy_multiplier"])
     segments, walls, puzzles, enemies, loot, connectors_out = [], [], [], [], [], []
     ambience_emitters = []
@@ -162,38 +166,58 @@ def build_wfc_map(mission_id: str, seed: int = 42, *, layout: dict | None = None
     # All blocking interiors/cover exist before any decoration is routed.
     for seg in segments:
         for w_idx, iw in enumerate(SEGMENT_TEMPLATES[seg["id"]]["interior_walls"]):
-            walls.append({"id": f"wall_{seg['index']}_int_{w_idx}",
+            wall = {"id": f"wall_{seg['index']}_int_{w_idx}",
                           "x": seg["x"] + iw["x"], "y": seg["y"] + iw["y"],
                           "w": iw["w"], "h": iw["h"],
                           "blocks_sight": iw["blocks_sight"],
                           "is_door": iw["is_door"], "material": iw["material"], "active": iw["active"],
-                          "type": "wall" if iw["blocks_sight"] else "cover"})
+                          "type": "wall" if iw["blocks_sight"] else "cover"}
+            if "threshold_id" in iw:
+                wall["threshold_id"] = iw["threshold_id"]
+                configure_threshold(wall, CATALOG)
+            walls.append(wall)
 
-    # Connectors (flat grid-aligned doorways) and upstream button/puzzle terminals
+    # Every connector retains jambs; only puzzle policies instantiate a terminal/wire.
     used_slots = {seg["index"]: set() for seg in segments}
     for c_idx, c in enumerate(wfc["connectors"]):
         gx, gy, d = c["gx"], c["gy"], c["dir"]
         x, y = gx * CELL_SIZE, gy * CELL_SIZE
         door_id = f"door_{c_idx}"
+        threshold_id = threshold_choices[c_idx]
+        policy = CATALOG.definitions["thresholds"][threshold_id]
+        door_color_info = DOOR_PALETTE[c_idx % len(DOOR_PALETTE)]
         if d in ("E", "W"):
             bx = x + CELL_SIZE if d == "E" else x
             wall_x = bx - WALL_THICKNESS * 0.5
             door_center = (bx, y + CELL_SIZE * 0.5)
             for t in (0.0, CONNECTOR_OFFSET + CONNECTOR_WIDTH):
                 walls.append({"id": f"flank_{c_idx}_{int(t)}", "x": wall_x, "y": y + t, "w": WALL_THICKNESS, "h": CONNECTOR_OFFSET, "active": True, "blocks_sight": True, "type": "wall"})
-            door_color_info = DOOR_PALETTE[c_idx % len(DOOR_PALETTE)]
-            walls.append({"id": door_id, "x": bx - WALL_THICKNESS * 0.5, "y": y + CONNECTOR_OFFSET, "w": WALL_THICKNESS, "h": CONNECTOR_WIDTH, "active": True, "blocks_sight": True, "type": "door", "color": door_color_info["color"], "color_name": door_color_info["name"]})
+            door_rect = {"x": wall_x, "y": y + CONNECTOR_OFFSET, "w": WALL_THICKNESS, "h": CONNECTOR_WIDTH}
         else:
             by = y + CELL_SIZE if d == "S" else y
             wall_y = by - WALL_THICKNESS * 0.5
             door_center = (x + CELL_SIZE * 0.5, by)
             for t in (0.0, CONNECTOR_OFFSET + CONNECTOR_WIDTH):
                 walls.append({"id": f"flank_{c_idx}_{int(t)}", "x": x + t, "y": wall_y, "w": CONNECTOR_OFFSET, "h": WALL_THICKNESS, "active": True, "blocks_sight": True, "type": "wall"})
-            door_color_info = DOOR_PALETTE[c_idx % len(DOOR_PALETTE)]
-            walls.append({"id": door_id, "x": x + CONNECTOR_OFFSET, "y": by - WALL_THICKNESS * 0.5, "w": CONNECTOR_WIDTH, "h": WALL_THICKNESS, "active": True, "blocks_sight": True, "type": "door", "color": door_color_info["color"], "color_name": door_color_info["name"]})
+            door_rect = {"x": x + CONNECTOR_OFFSET, "y": wall_y, "w": CONNECTOR_WIDTH, "h": WALL_THICKNESS}
 
         from_seg = segments[c["from_seg"]]
         to_seg = segments[c["to_seg"]]
+        connector = {"id": f"conn_{c_idx}", "threshold_id": threshold_id, "mode": policy["mode"],
+                     "from_segment": from_seg["index"], "to_segment": to_seg["index"],
+                     "gx": gx, "gy": gy, "dir": d, "x": door_center[0], "y": door_center[1]}
+        connectors_out.append(connector)
+        if policy["mode"] == "open":
+            continue
+        door = {**door_rect, "id": door_id, "threshold_id": threshold_id,
+                "active": True, "blocks_movement": True, "blocks_projectile": True, "blocks_sight": True,
+                "type": policy["door_type"], "color": door_color_info["color"], "color_name": door_color_info["name"]}
+        configure_threshold(door, CATALOG)
+        walls.append(door)
+        connector["door_id"] = door_id
+        if policy["mode"] == "proximity":
+            continue
+
         tpl = SEGMENT_TEMPLATES[from_seg["id"]]
         slots = tpl.get("puzzle_slots", [])
         slot_idx = next((i for i in range(len(slots)) if i not in used_slots[from_seg["index"]]), None)
@@ -201,16 +225,15 @@ def build_wfc_map(mission_id: str, seed: int = 42, *, layout: dict | None = None
             used_slots[from_seg["index"]].add(slot_idx)
             slot = slots[slot_idx]
             px, py = from_seg["x"] + float(slot["x"]), from_seg["y"] + float(slot["y"])
-            ptype = slot["type"]
             plabel = f"{slot['label']} ({from_seg['name']} -> {to_seg['name']})"
         else:
             dx, dy, _ = DIRS[d]
             px = door_center[0] - dx * 2.4
             py = door_center[1] - dy * 2.4
-            ptype = "power_reroute" if c_idx % 2 == 0 else "signal_decrypt"
             plabel = f"Unlock {to_seg['name']} Bulkhead"
 
         puzzle_id = f"puzzle_{c_idx}"
+        ptype = policy["puzzle_id"]
         puzzles.append({
             "id": puzzle_id,
             "type": ptype,
@@ -228,18 +251,7 @@ def build_wfc_map(mission_id: str, seed: int = 42, *, layout: dict | None = None
             "target_segment_index": to_seg["index"],
             "data": generate_puzzle_data(ptype, rng=rng),
         })
-        connectors_out.append({
-            "id": f"conn_{c_idx}",
-            "door_id": door_id,
-            "puzzle_id": puzzle_id,
-            "from_segment": from_seg["index"],
-            "to_segment": to_seg["index"],
-            "gx": gx,
-            "gy": gy,
-            "dir": d,
-            "x": door_center[0],
-            "y": door_center[1],
-        })
+        connector["puzzle_id"] = puzzle_id
 
 
     props, prop_puzzles = [], []
@@ -388,7 +400,6 @@ def build_wfc_map(mission_id: str, seed: int = 42, *, layout: dict | None = None
         "spaceship": ship,
         "player_spawn_points": player_spawn_points,
         "extraction_zone": extraction_zone,
-        "test_mode": False,
     }
 
 
@@ -430,25 +441,47 @@ def validate_generated_map(map_data: dict) -> None:
     for w in walls:
         if any(not math.isfinite(w[k]) for k in ("x", "y", "w", "h")) or w["w"] <= 0 or w["h"] <= 0:
             raise ValueError("Invalid collision rectangle")
+    all_puzzles = map_data["puzzles"] + [c["puzzle"] for c in map_data.get("crates", []) if c.get("puzzle")]
+    if len({p["id"] for p in all_puzzles}) != len(all_puzzles):
+        raise ValueError("Duplicate puzzle IDs")
     puzzles = [p for p in map_data["puzzles"] if not p.get("prop_id")]
     puzzle_by_id = {p["id"]: p for p in puzzles}
     if len(puzzle_by_id) != len(puzzles):
         raise ValueError("Duplicate puzzle IDs")
-    doors = {p["door_id"] for p in puzzles}
-    if len(doors) != len(puzzles) or any(wall_by_id.get(d, {}).get("type") != "door" for d in doors):
+    puzzle_doors = {p["door_id"] for p in puzzles}
+    if len(puzzle_doors) != len(puzzles) or any(wall_by_id.get(d, {}).get("type") != "door" for d in puzzle_doors):
         raise ValueError("Invalid puzzle door references")
+    threshold_doors = set()
+    proximity_doors = []
+    for wall in walls:
+        if "threshold_id" not in wall:
+            if "mode" in wall or wall.get("type") == "door":
+                raise ValueError("Door mode requires threshold policy reference")
+            continue
+        policy = CATALOG.definitions["thresholds"].get(wall["threshold_id"])
+        if not policy or policy["mode"] == "open" or any(wall.get(k) != v for k, v in policy.items() if k != "puzzle_id"):
+            raise ValueError("Invalid door threshold policy")
+        if (wall.get("type") != policy["door_type"] or wall.get("is_door") is not True or wall.get("active") is not True or
+                any(wall.get(flag) is not True for flag in ("blocks_movement", "blocks_projectile", "blocks_sight"))):
+            raise ValueError("Threshold door must initially block movement and sight")
+        threshold_doors.add(wall["id"])
+        if policy["mode"] == "proximity":
+            proximity_doors.append(wall)
     ramp_id = map_data["spaceship"]["door_wall_id"]
     if ramp_id not in wall_by_id:
         raise ValueError("Missing dropship ramp")
     opened = {ramp_id}
-    all_open = doors | opened
+    all_open = threshold_doors | opened
     permanent = [w for w in walls if w.get("active", True) and w["id"] not in all_open]
     adj = {i: set() for i in by_index}
     connectors = map_data["connectors"]
-    if len(connectors) != len(puzzles):
-        raise ValueError("Connector/puzzle count mismatch")
-    used_doors = set()
+    if len({c["id"] for c in connectors}) != len(connectors):
+        raise ValueError("Duplicate connector IDs")
+    used_doors, used_puzzles, used_ports = set(), set(), set()
     for c in connectors:
+        policy = CATALOG.definitions["thresholds"].get(c.get("threshold_id"))
+        if not policy or c.get("mode") != policy["mode"] or mission["threshold_weights"].get(c["threshold_id"], 0) <= 0:
+            raise ValueError("Invalid connector threshold policy")
         u, v = c["from_segment"], c["to_segment"]
         if u not in by_index or v not in by_index or u == v or c["dir"] not in DIRS:
             raise ValueError("Invalid connector segment/direction")
@@ -458,21 +491,49 @@ def validate_generated_map(map_data: dict) -> None:
         pb = (c["gx"] + dx - b["grid_x"], c["gy"] + dy - b["grid_y"], opposite)
         def ports(s):
             return {(p["cell_x"], p["cell_y"], p["dir"]) for p in SEGMENT_TEMPLATES[s["id"]]["connector_ports"]}
-        p = puzzle_by_id.get(c["puzzle_id"], {})
-        if (pa not in ports(a) or pb not in ports(b) or c["door_id"] not in doors or
-                c["door_id"] in used_doors or p.get("door_id") != c["door_id"] or
-                p.get("segment_index") != u or p.get("target_segment_index") != v):
-            raise ValueError("Unmatched connector ports/puzzle")
-        used_doors.add(c["door_id"])
+        endpoints = {(u, *pa), (v, *pb)}
+        if pa not in ports(a) or pb not in ports(b) or used_ports & endpoints:
+            raise ValueError("Unmatched or duplicate connector ports")
+        used_ports.update(endpoints)
+        if policy["mode"] == "open":
+            if "door_id" in c or "puzzle_id" in c:
+                raise ValueError("Open passage forbids door/puzzle references")
+        else:
+            door = wall_by_id.get(c.get("door_id"), {})
+            if door.get("threshold_id") != c["threshold_id"] or c.get("door_id") not in threshold_doors or c["door_id"] in used_doors:
+                raise ValueError("Unmatched connector door policy")
+            used_doors.add(c["door_id"])
+            if policy["mode"] == "proximity":
+                if "puzzle_id" in c:
+                    raise ValueError("Proximity connector forbids puzzle reference")
+            else:
+                p = puzzle_by_id.get(c.get("puzzle_id"), {})
+                if (p.get("door_id") != c["door_id"] or p.get("definition_id") != policy["puzzle_id"] or
+                        p.get("type") != policy["puzzle_id"] or p.get("definition") != mutable_copy(CATALOG.definitions["puzzles"][policy["puzzle_id"]]) or
+                        p.get("segment_index") != u or p.get("target_segment_index") != v or c.get("puzzle_id") in used_puzzles):
+                    raise ValueError("Unmatched connector puzzle policy")
+                used_puzzles.add(c["puzzle_id"])
         center = ((c["gx"] + (1 if dx == 1 else 0.5 if dx == 0 else 0)) * CELL_SIZE,
                   (c["gy"] + (1 if dy == 1 else 0.5 if dy == 0 else 0)) * CELL_SIZE)
-        door = wall_by_id[c["door_id"]]
-        if ((c["x"], c["y"]) != center or not point_in_rect(*center, door) or
+        expected_door = ({"x": center[0] - WALL_THICKNESS / 2, "y": center[1] - CONNECTOR_WIDTH / 2, "w": WALL_THICKNESS, "h": CONNECTOR_WIDTH}
+                         if dx else {"x": center[0] - CONNECTOR_WIDTH / 2, "y": center[1] - WALL_THICKNESS / 2, "w": CONNECTOR_WIDTH, "h": WALL_THICKNESS})
+        if ((c["x"], c["y"]) != center or (policy["mode"] != "open" and any(door[k] != v for k, v in expected_door.items())) or
                 not collision_path_clear((center[0] - dx * 2, center[1] - dy * 2),
                                          (center[0] + dx * 2, center[1] + dy * 2), radius, permanent)):
             raise ValueError("Blocked or misplaced connector")
+        # An open threshold still needs both solid jambs, not an entire open cell edge.
+        for offset in (-CELL_SIZE / 2, CONNECTOR_WIDTH / 2):
+            jamb = ({"x": center[0] - WALL_THICKNESS / 2, "y": center[1] + offset, "w": WALL_THICKNESS, "h": CONNECTOR_OFFSET}
+                    if dx else {"x": center[0] + offset, "y": center[1] - WALL_THICKNESS / 2, "w": CONNECTOR_OFFSET, "h": WALL_THICKNESS})
+            if not any(all(w.get(k) == v for k, v in jamb.items()) and w.get("active", True) and
+                       w.get("blocks_movement", True) and w.get("blocks_sight", True) and not w.get("is_door", False) for w in permanent):
+                raise ValueError("Missing connector jamb enclosure")
         adj[u].add(v)
         adj[v].add(u)
+    if used_puzzles != set(puzzle_by_id) or used_doors & puzzle_doors != puzzle_doors:
+        raise ValueError("Unmatched puzzle/connector references")
+    if threshold_doors - used_doors != {w["id"] for w in proximity_doors if w["id"] not in used_doors}:
+        raise ValueError("Puzzle door requires a connector")
     connected, queue = {map_data["start_segment_index"]}, deque([map_data["start_segment_index"]])
     while queue:
         for v in sorted(adj[queue.popleft()] - connected):
@@ -553,8 +614,11 @@ def validate_generated_map(map_data: dict) -> None:
                    math.dist(v, target) <= p["radius"] and
                    collision_path_clear(v, target, 0, blockers(v, target)) for v in visited):
                 reachable.append(p)
-        if not reachable:
+        triggered = [w for w in proximity_doors if w["id"] not in opened and
+                     any(distance_to_door(*v, w) <= w["trigger_radius"] for v in visited)]
+        if not reachable and not triggered:
             break
+        opened.update(w["id"] for w in triggered)
         for p in reachable:
             solved.add(p["id"])
             opened.add(p["door_id"])
@@ -608,7 +672,7 @@ def verify_level_solvability(map_data: dict) -> bool:
     return True
 
 
-def build_mission_map(mission_id: str, seed: int = 42, test_mode: bool = False) -> dict:
+def build_mission_map(mission_id: str, seed: int = 42) -> dict:
     """Builds a verified WFC level map for a mission."""
     if mission_id not in MISSIONS or type(seed) is not int:
         raise ValueError("Known mission and integer seed required")
@@ -627,10 +691,5 @@ def build_mission_map(mission_id: str, seed: int = 42, test_mode: bool = False) 
         candidate.update(requested_seed=seed, resolved_seed=resolved_seed,
                          generation_diagnostics=diagnostics, generation_attempts=attempt + 1,
                          geometry_validated=True)
-        if test_mode:
-            candidate["test_mode"] = True
-            candidate["enemies"] = []
-            candidate["loot"] = []
-            candidate["crates"] = []
         return candidate
     raise GenerationError(mission_id, seed, diagnostics)

@@ -241,8 +241,8 @@ def test_development_overrides_and_launch_readiness_are_explicit(game_room):
     game_room.add_player("leader")
     with pytest.raises(ValueError, match="Development"):
         dispatch_command(game_room, "leader", {"type": "generate_level"})
-    with pytest.raises(ValueError, match="Test mode"):
-        dispatch_command(game_room, "leader", {"type": "start_mission", "test_mode": True})
+    with pytest.raises(ValueError):
+        parse_command('{"type":"start_mission","test_mode":true}')
     with pytest.raises(ValueError, match="all-ready"):
         dispatch_command(game_room, "leader", {"type": "start_mission"})
     game_room.prepare_mission("leader")

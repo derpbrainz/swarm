@@ -56,7 +56,7 @@ def test_heal_persistence_failure_does_not_publish_hp_or_consumption(game_room, 
 
 
 @pytest.mark.parametrize("authored", [True, False])
-def test_enemy_free_testing_skips_only_real_enemy_objectives(game_room, authored):
+def test_uncompleted_levels_keep_enemies_and_require_actual_enemy_objectives(game_room, authored):
     game_room.add_player("leader")
     record = game_room.level_store.levels["outpost_101"]
     record["tested"] = False
@@ -70,14 +70,14 @@ def test_enemy_free_testing_skips_only_real_enemy_objectives(game_room, authored
         record["map_template"]["objective_definitions"] = [rule]
     original = copy.deepcopy(record)
     assert game_room.start_mission("leader")
-    assert game_room.map_data["test_mode"] and game_room.map_data["enemies"] == []
+    assert game_room.map_data["enemies"]
     objectives.update(game_room)
     state = next(s for s in game_room.map_data["objectives"] if s["id"] == "boss_gate")
-    assert state["completed"] and state["testing_skipped"]
+    assert not state["completed"] and "testing_skipped" not in state
     assert game_room.players["leader"]["kills"] == 0
     assert record == original
     game_room.reset_to_lobby()
-    assert game_room.start_mission("leader", force_test_mode=False)
+    assert game_room.start_mission("leader")
     objectives.update(game_room)
     state = next(s for s in game_room.map_data["objectives"] if s["id"] == "boss_gate")
     assert not state["completed"]
@@ -139,7 +139,7 @@ def test_invalid_automatic_launch_stays_in_preparation_and_clears_readiness(game
     assert game_room.phase == "prep"
 
 
-@pytest.mark.parametrize("method", ["mark_tested", "mark_completed"])
+@pytest.mark.parametrize("method", ["mark_completed"])
 def test_progress_save_failure_does_not_publish_unlock_flags(game_room, monkeypatch, method):
     store = game_room.level_store
     record = store.levels["outpost_101"]

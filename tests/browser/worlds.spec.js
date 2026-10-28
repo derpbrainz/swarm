@@ -148,10 +148,10 @@ test('two actual clients select prepare depart victory and defeat return late jo
       await leader.waitForFunction(() => window.__game.state.players.length === 2);
       if (outcome === 'victory') {
         await move(leader, 11, 11); await move(peer, 11, 11);
-        await expect(leader.locator('#end-title')).toHaveText('EXTRACTION SUCCESSFUL');
+        await expect(leader.locator('#end-title')).toHaveText('EXTRACTION SUCCESSFUL - LEVEL TEST PASSED');
       } else {
         await fixture(leader, 'hub_defeat');
-        await expect(leader.locator('#end-title')).toHaveText('SQUAD WIPE — MISSION FAILED');
+        await expect(leader.locator('#end-title')).toHaveText('SQUAD WIPE - MISSION FAILED');
       }
       await leader.locator('#return-lobby-btn').click();
       await leader.waitForFunction(id => window.__game.state.world_kind === 'hub' && window.__game.state.world_id !== id, mission.world_id);

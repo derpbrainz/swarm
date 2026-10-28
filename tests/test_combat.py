@@ -23,7 +23,7 @@ def arena(room, classes=("recon", "medic")):
         pid = f"p{index}"
         players.append(room.add_player(pid))
         assert room.select_class(pid, cls)
-    assert room.start_mission("p0", False)
+    assert room.start_mission("p0")
     room.phase = "active"
     room.map_data.update(walls=[], enemies=[], crates=[], puzzles=[], loot=[],
                          extraction_zone={"x": 200, "y": 200, "w": 2, "h": 2, "active": False})

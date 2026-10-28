@@ -158,3 +158,158 @@ test('actual fog keeps occluded cells unknown, prior cells dim, current cells cl
   expect(result.reset).toBe('unknown');
   await page.locator('#fog-proof').screenshot({ path: testInfo.outputPath('stage10-fog-numeric-proof.png') });
 });
+
+test('raised walls remain visible from every side without clearing hidden floor fog', async ({ page }) => {
+  await page.goto('/'); await page.waitForFunction(() => window.__game?.catalog);
+  const result = await page.evaluate(async () => {
+    const { IsometricRenderer } = await import('/static/js/renderer.js');
+    const { worldToIso } = await import('/static/js/iso.js');
+    const canvas = document.createElement('canvas'); canvas.width = 1280; canvas.height = 720;
+    const renderer = new IsometricRenderer(canvas);
+    renderer.setPresentation(window.__game.catalog.presentation);
+    renderer.drawPlayer = () => {};
+    renderer.drawActorMarker = () => {};
+    const camera = { x: 9, y: 9, screenW: 1280, screenH: 720 };
+    const state = { world_id: 'directional-wall', simulation_time: 0,
+      map: { width: 20, height: 20,
+        segments: [{ x: 0, y: 0, w: 20, h: 20, theme: 'hangar', name: 'Walls', index: 0 }],
+        walls: [{ id: 'wall', x: 8, y: 8, w: 2, h: .6, type: 'wall', material_id: 'test_red' }] },
+      players: [], enemies: [] };
+    const pixel = (x, y, height = 0, ctx = renderer.ctx) => {
+      const projected = worldToIso(x, y, camera);
+      return [...ctx.getImageData(Math.round(projected.x), Math.round(projected.y - height), 1, 1).data];
+    };
+    const samples = [];
+    for (const [x, y] of [[11.5, 8.3], [6.5, 8.3], [9, 11.5], [9, 5], [11.5, 11.5], [6.5, 5]]) {
+      renderer.resetExplored();
+      state.players = [{ id: 'player', x, y, hp: 100, max_hp: 100, angle: 0, sight_range: 12 }];
+      renderer.render(state, 'player', null, camera);
+      samples.push({ player: [x, y], roof: pixel(9, 8.3, 42), face: pixel(10, 8.3, 21),
+        roofFog: pixel(9, 8.3, 42, renderer.fogCtx)[3] });
+    }
+    renderer.resetExplored();
+    state.map.walls = [{ id: 'barrier', x: 8, y: 0, w: .2, h: 20, type: 'wall' },
+      { id: 'hidden-wall', x: 12, y: 8, w: 2, h: .6, type: 'wall', material_id: 'test_red' }];
+    state.players = [{ id: 'player', x: 6, y: 10, hp: 100, max_hp: 100, angle: 0, sight_range: 12 }];
+    renderer.render(state, 'player', null, camera);
+    const hiddenFloor = pixel(11, 10, 0, renderer.fogCtx)[3];
+    const unknownCell = renderer.visibilityAt(11, 10);
+    const hiddenWall = pixel(13, 8.3, 42, renderer.fogCtx)[3];
+    state.map.walls[0].active = false;
+    state.map.props = [{ id: 'opaque-prop', x: 8, y: 0, active: true,
+      geometry: { sight: { x: 8, y: 0, w: .2, h: 20 } } }];
+    renderer.resetExplored();
+    renderer.render(state, 'player', null, camera);
+    const propOccludedWall = pixel(13, 8.3, 42, renderer.fogCtx)[3];
+    renderer.resetExplored();
+    state.map.props = [];
+    state.map.walls[1].active = false;
+    renderer.render(state, 'player', null, camera);
+    const inactiveWallCount = renderer.scene.filter(entity => entity.kind === 'wall').length;
+    renderer.dispose();
+    return { samples, hiddenFloor, unknownCell, hiddenWall, propOccludedWall, inactiveWallCount };
+  });
+  for (const sample of result.samples) {
+    expect(sample.roof, `wall roof from player ${sample.player}`).toEqual([224, 32, 32, 255]);
+    expect(sample.roofFog, `raised visibility from player ${sample.player}`).toBe(0);
+  }
+  expect(result.samples[0].face).toEqual([224, 32, 32, 255]);
+  expect(result.hiddenFloor).toBeGreaterThan(245);
+  expect(result.unknownCell).toBe('unknown');
+  expect(result.hiddenWall).toBeGreaterThan(245);
+  expect(result.propOccludedWall).toBeGreaterThan(245);
+  expect(result.inactiveWallCount).toBe(0);
+});
+
+test('explored wall sections stay uniformly dim outside shared sight and reset for a new world', async ({ page }) => {
+  await page.goto('/'); await page.waitForFunction(() => window.__game?.catalog);
+  const result = await page.evaluate(async () => {
+    const { IsometricRenderer } = await import('/static/js/renderer.js');
+    const { worldToIso } = await import('/static/js/iso.js');
+    const canvas = document.createElement('canvas'); canvas.width = 1280; canvas.height = 720;
+    const renderer = new IsometricRenderer(canvas);
+    renderer.setPresentation(window.__game.catalog.presentation);
+    renderer.drawPlayer = () => {};
+    renderer.drawActorMarker = () => {};
+    const camera = { x: 9, y: 9, screenW: 1280, screenH: 720 };
+    const state = { world_id: 'wall-memory', simulation_time: 0,
+      map: { width: 40, height: 40,
+        segments: [{ x: 0, y: 0, w: 40, h: 40, theme: 'hangar', name: 'Memory', index: 0 }],
+        walls: [{ id: 'seen', x: 8, y: 8, w: 4, h: .6, type: 'wall', material_id: 'test_red' },
+          { id: 'hidden', x: 8, y: 4, w: 4, h: .6, type: 'wall', material_id: 'test_red' }] },
+      players: [{ id: 'player', x: 10, y: 11.5, hp: 100, max_hp: 100, angle: 0, sight_range: 12 }], enemies: [] };
+    const sample = (x, y, height = 42) => {
+      const point = worldToIso(x, y, camera);
+      const px = Math.round(point.x), py = Math.round(point.y - height);
+      return { fog: renderer.fogCtx.getImageData(px, py, 1, 1).data[3], pixel: [...renderer.ctx.getImageData(px, py, 1, 1).data] };
+    };
+    renderer.render(state, 'player', null, camera);
+    const current = sample(9, 8.3), hidden = sample(9, 4.3);
+    state.players[0].x = 30; state.players[0].y = 30;
+    renderer.render(state, 'player', null, camera);
+    const remembered = sample(9, 8.3), seam = sample(10, 8.3);
+    const hiddenStill = sample(9, 4.3);
+    state.players.push({ id: 'teammate', x: 10, y: 11.5, hp: 100, max_hp: 100, angle: 0, sight_range: 12 });
+    renderer.render(state, 'player', null, camera);
+    const sharedCurrent = sample(9, 8.3);
+    state.players.pop();
+    state.map.walls[0].active = false;
+    renderer.render(state, 'player', null, camera);
+    const removedFromScene = !renderer.scene.some(entity => entity.entityId === 'seen');
+    state.map.walls[0].active = true;
+    state.world_id = 'new-wall-memory';
+    renderer.render(state, 'player', null, camera);
+    const reset = sample(9, 8.3);
+    const resetMemory = renderer.exploredWalls.size;
+    renderer.dispose();
+    return { current, hidden, remembered, seam, hiddenStill, sharedCurrent, removedFromScene, reset, resetMemory };
+  });
+  expect(result.current.fog).toBe(0);
+  expect(result.current.pixel).toEqual([224, 32, 32, 255]);
+  expect(result.hidden.fog).toBeGreaterThan(245);
+  expect(result.remembered.fog).toBeGreaterThan(140);
+  expect(result.remembered.fog).toBeLessThan(175);
+  expect(result.remembered.pixel[0]).toBeLessThan(result.current.pixel[0]);
+  expect(result.remembered.pixel[0]).toBeGreaterThan(50);
+  expect(Math.abs(result.seam.fog - result.remembered.fog)).toBeLessThanOrEqual(1);
+  expect(result.hiddenStill.fog).toBeGreaterThan(245);
+  expect(result.sharedCurrent.fog).toBe(0);
+  expect(result.removedFromScene).toBe(true);
+  expect(result.reset.fog).toBeGreaterThan(245);
+  expect(result.resetMemory).toBe(0);
+});
+
+test('wall interiors seen through an offset opening enter exploration memory', async ({ page }) => {
+  await page.goto('/'); await page.waitForFunction(() => window.__game?.catalog);
+  const result = await page.evaluate(async () => {
+    const { IsometricRenderer } = await import('/static/js/renderer.js');
+    const { worldToIso } = await import('/static/js/iso.js');
+    const canvas = document.createElement('canvas'); canvas.width = 1280; canvas.height = 720;
+    const renderer = new IsometricRenderer(canvas);
+    renderer.setPresentation(window.__game.catalog.presentation);
+    renderer.drawPlayer = () => {};
+    renderer.drawActorMarker = () => {};
+    const camera = { x: 10, y: 10, screenW: 1280, screenH: 720 };
+    const state = { world_id: 'offset-opening', map: { width: 40, height: 40,
+      segments: [{ x: 0, y: 0, w: 40, h: 40, theme: 'hangar', name: 'Opening', index: 0 }],
+      walls: [{ id: 'target', x: 8, y: 4, w: 2, h: .6, type: 'wall', material_id: 'test_red' },
+        { id: 'left-jamb', x: 0, y: 8, w: 8.74, h: .2, type: 'wall' },
+        { id: 'right-jamb', x: 9.94, y: 8, w: 30.06, h: .2, type: 'wall' }] },
+      players: [{ id: 'player', x: 10, y: 16, hp: 100, max_hp: 100, angle: 0, sight_range: 14 }], enemies: [] };
+    const point = worldToIso(9.15, 4.3, camera);
+    const fog = () => renderer.fogCtx.getImageData(Math.round(point.x), Math.round(point.y - 42), 1, 1).data[3];
+    renderer.render(state, 'player', null, camera);
+    const current = fog();
+    const rememberedId = renderer.scene.find(e => e.entityId === 'target').id;
+    const discovered = renderer.exploredWalls.has(rememberedId);
+    state.players[0].x = 35; state.players[0].y = 35;
+    renderer.render(state, 'player', null, camera);
+    const remembered = fog();
+    renderer.dispose();
+    return { current, discovered, remembered };
+  });
+  expect(result.discovered).toBe(true);
+  expect(result.current).toBe(0);
+  expect(result.remembered).toBeGreaterThan(140);
+  expect(result.remembered).toBeLessThan(175);
+});

@@ -12,7 +12,7 @@ from backend.app.engine.sound_occlusion import calculate_occlusion, clear_occlus
 
 def arena(room):
     a, b = room.add_player("a"), room.add_player("b")
-    assert room.start_mission("a", False)
+    assert room.start_mission("a")
     room.phase = "active"
     room.map_data.update(walls=[], enemies=[], puzzles=[], crates=[], loot=[],
                          extraction_zone={"x": 200, "y": 200, "w": 2, "h": 2, "active": False})
@@ -96,7 +96,7 @@ def test_world_reset_monotonic_identity_and_previous_world_filter(game_room):
     assert lobby["music"]["state"] == "lobby" and lobby["world_id"] is None
     assert lobby["audio_events"] == [] and not game_room.pending_sound_events
     game_room.step(0.2)
-    assert game_room.start_mission("a", False)
+    assert game_room.start_mission("a")
     game_room._emit_sound(0, 0, 1, sound_type="weapon_fire_pistol")
     new = game_room.sound_events[0]
     assert new["sequence"] > old["sequence"] and new["timestamp"] > old["timestamp"]
@@ -176,7 +176,7 @@ def test_no_door_name_guess_and_exact_geometry_cache_invalidation():
 
 def test_actual_retained_spaceship_ramp_is_explicit_and_open_not_occluded(game_room):
     game_room.add_player("a")
-    assert game_room.start_mission("a", False)
+    assert game_room.start_mission("a")
     ramp = next(w for w in game_room.map_data["walls"] if w["id"] == game_room.map_data["spaceship"]["door_wall_id"])
     assert ramp["is_door"] and ramp["material"] == "door"
     x, y = ramp["x"], ramp["y"] + ramp["h"] / 2
